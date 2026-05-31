@@ -1,0 +1,16 @@
+apiVersion: v2
+name: hermes-webui
+version: 0.1.0
+appVersion: "latest"
+description: Helm chart pour déployer nesquena/hermes-webui en mode SaaS sur Kubernetes avec stockage persistant.
+type: application
+keywords:
+  - hermes
+  - webui
+  - saas
+  - ai-agent
+home: https://github.com/nesquena/hermes-webui
+sources:
+  - https://github.com/nesquena/hermes-webui
+maintainers:
+  - name: agent-saas

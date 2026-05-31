@@ -1,0 +1,26 @@
+tenant:
+  id: acme
+
+auth:
+  existingSecret: hermes-webui-auth
+
+persistentStorage:
+  hermesHome:
+    size: 20Gi
+    storageClass: standard
+  workspace:
+    size: 100Gi
+    storageClass: standard
+
+ingress:
+  enabled: true
+  className: nginx
+  hosts:
+    - host: hermes-acme.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: hermes-acme-tls
+      hosts:
+        - hermes-acme.example.com
