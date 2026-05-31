@@ -1,6 +1,6 @@
 {{- if and .Values.hermesConfig.seed.enabled (not .Values.persistentStorage.hermesHome.enabled) -}}
 {{- fail "hermesConfig.seed.enabled requires persistentStorage.hermesHome.enabled=true so the generated config.yaml can be persisted" -}}
 {{- end -}}
-{{- if and .Values.hermesConfig.seed.enabled (not .Values.hermesConfig.seed.existingSecret) (not .Values.hermesConfig.seed.config) -}}
-{{- fail "hermesConfig.seed.enabled requires either hermesConfig.seed.config or hermesConfig.seed.existingSecret" -}}
+{{- if and .Values.hermesConfig.seed.enabled (not .Values.hermesConfig.seed.existingSecret) (not .Values.hermesConfig.seed.config) (not .Values.hermesConfig.seed.envConfig) -}}
+{{- fail "hermesConfig.seed.enabled requires hermesConfig.seed.config, hermesConfig.seed.envConfig, or hermesConfig.seed.existingSecret" -}}
 {{- end -}}

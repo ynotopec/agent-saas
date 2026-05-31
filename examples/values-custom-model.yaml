@@ -24,13 +24,28 @@ hermesConfig:
   seed:
     enabled: true
     overwrite: false
+    # Si le PVC contient déjà une ancienne .env avec OPENAI_API_KEY, activez
+    # temporairement envOverwrite=true avec envConfig ci-dessous pour repartir
+    # sur le seul provider custom.
+    envOverwrite: false
+    envConfig: |
+      # Provider custom local keyless/Ollama: aucune clé OpenAI/Anthropic ici.
     config: |
       model:
         default: qwen2.5-coder:32b
-        provider: custom
+        # Utiliser le slug nommé évite que WebUI/agent retombe sur OpenAI ou
+        # un provider générique quand un provider custom nommé existe.
+        provider: custom:local
         base_url: http://ollama.ollama.svc.cluster.local:11434/v1
         api_key: local
         context_length: 64000
+      providers:
+        custom:
+          base_url: http://ollama.ollama.svc.cluster.local:11434/v1
+          api_key: local
+        "custom:local":
+          base_url: http://ollama.ollama.svc.cluster.local:11434/v1
+          api_key: local
       custom_providers:
         - name: local
           base_url: http://ollama.ollama.svc.cluster.local:11434/v1

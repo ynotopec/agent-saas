@@ -56,6 +56,9 @@ env:
   HERMES_CONFIG_PATH: /home/hermeswebui/.hermes/config.yaml
   HERMES_WEBUI_STATE_DIR: /home/hermeswebui/.hermes/webui
   HERMES_WEBUI_DEFAULT_WORKSPACE: /workspace
+  # Déploiement managé: le chart peut précharger config.yaml, donc on évite que
+  # le wizard de première connexion réécrive un provider/API key différent.
+  HERMES_WEBUI_SKIP_ONBOARDING: "1"
 
 
 # Configuration Hermes initiale. Utile pour déclarer un provider/modèle custom dès le déploiement
@@ -70,6 +73,12 @@ hermesConfig:
     existingSecret: ""
     secretKey: config.yaml
     config: ""
+    # Optionnel: précharger aussi /home/hermeswebui/.hermes/.env. Utile pour
+    # supprimer les clés provider obsolètes (ex: OPENAI_API_KEY) déjà présentes
+    # dans le PVC en activant temporairement envOverwrite=true.
+    envSecretKey: .env
+    envConfig: ""
+    envOverwrite: false
     initImage:
       repository: busybox
       tag: "1.36"
