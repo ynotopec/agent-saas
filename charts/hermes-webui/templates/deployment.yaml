@@ -26,6 +26,28 @@ spec:
       serviceAccountName: {{ include "hermes-webui.serviceAccountName" . }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- if and .Values.hermesConfig.seed.enabled .Values.persistentStorage.hermesHome.enabled }}
+      initContainers:
+        - name: seed-hermes-config
+          image: "{{ .Values.hermesConfig.seed.initImage.repository }}:{{ .Values.hermesConfig.seed.initImage.tag }}"
+          imagePullPolicy: {{ .Values.hermesConfig.seed.initImage.pullPolicy }}
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              target={{ .Values.env.HERMES_CONFIG_PATH | default (printf "%s/config.yaml" .Values.persistentStorage.hermesHome.mountPath) | quote }}
+              mkdir -p "$(dirname "$target")"
+              if [ {{ ternary "1" "0" .Values.hermesConfig.seed.overwrite | quote }} = "1" ] || [ ! -s "$target" ]; then
+                cp /hermes-config/{{ .Values.hermesConfig.seed.secretKey }} "$target"
+                chmod 600 "$target"
+              fi
+          volumeMounts:
+            - name: hermes-home
+              mountPath: {{ .Values.persistentStorage.hermesHome.mountPath }}
+            - name: hermes-config-seed
+              mountPath: /hermes-config
+              readOnly: true
+      {{- end }}
       containers:
         - name: hermes-webui
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
@@ -72,6 +94,11 @@ spec:
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
       volumes:
+        {{- if and .Values.hermesConfig.seed.enabled .Values.persistentStorage.hermesHome.enabled }}
+        - name: hermes-config-seed
+          secret:
+            secretName: {{ include "hermes-webui.configSecretName" . }}
+        {{- end }}
         {{- if .Values.persistentStorage.hermesHome.enabled }}
         - name: hermes-home
           persistentVolumeClaim:

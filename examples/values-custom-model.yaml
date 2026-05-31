@@ -1,0 +1,40 @@
+tenant:
+  id: acme
+
+auth:
+  existingSecret: hermes-webui-auth
+
+persistentStorage:
+  hermesHome:
+    size: 20Gi
+    storageClass: standard
+  workspace:
+    size: 100Gi
+    storageClass: standard
+
+# Ingress existant: le chart crée seulement le Service ClusterIP.
+ingress:
+  enabled: false
+
+# Déclare un provider custom OpenAI-compatible dès le premier démarrage.
+# Pour un PVC déjà créé avec un config.yaml incomplet, passez overwrite à true
+# le temps d'un helm upgrade, puis remettez-le à false pour laisser Hermes persister
+# les changements faits depuis l'UI/CLI.
+hermesConfig:
+  seed:
+    enabled: true
+    overwrite: false
+    config: |
+      model:
+        default: qwen2.5-coder:32b
+        provider: custom
+        base_url: http://ollama.ollama.svc.cluster.local:11434/v1
+        api_key: local
+        context_length: 64000
+      custom_providers:
+        - name: local
+          base_url: http://ollama.ollama.svc.cluster.local:11434/v1
+          api_key: local
+          models:
+            qwen2.5-coder:32b:
+              context_length: 64000

@@ -2,7 +2,8 @@ replicaCount: 1
 
 image:
   repository: ghcr.io/nesquena/hermes-webui
-  tag: latest
+  # Version incluant les correctifs de découverte des providers/modèles custom.
+  tag: v0.51.145
   pullPolicy: IfNotPresent
 
 nameOverride: ""
@@ -52,8 +53,27 @@ env:
   HERMES_WEBUI_HOST: 0.0.0.0
   HERMES_WEBUI_PORT: "8787"
   HERMES_HOME: /home/hermeswebui/.hermes
+  HERMES_CONFIG_PATH: /home/hermeswebui/.hermes/config.yaml
   HERMES_WEBUI_STATE_DIR: /home/hermeswebui/.hermes/webui
   HERMES_WEBUI_DEFAULT_WORKSPACE: /workspace
+
+
+# Configuration Hermes initiale. Utile pour déclarer un provider/modèle custom dès le déploiement
+# et éviter de dépendre uniquement du wizard de première connexion.
+# Le contenu est copié dans le PVC Hermes Home avant le démarrage de l'application.
+hermesConfig:
+  seed:
+    enabled: false
+    # Si overwrite=false, le fichier n'est copié que si HERMES_CONFIG_PATH n'existe pas déjà.
+    # Passez temporairement à true pour corriger un config.yaml existant sur un PVC.
+    overwrite: false
+    existingSecret: ""
+    secretKey: config.yaml
+    config: ""
+    initImage:
+      repository: busybox
+      tag: "1.36"
+      pullPolicy: IfNotPresent
 
 # Variables d'environnement sensibles ou provider keys à injecter depuis des Secrets existants.
 extraEnvFrom: []
