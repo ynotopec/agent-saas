@@ -1,0 +1,96 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "hermes-webui.fullname" . }}
+  labels:
+    {{- include "hermes-webui.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "hermes-webui.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "hermes-webui.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "hermes-webui.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: hermes-webui
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+          env:
+            - name: WANTED_UID
+              value: "1024"
+            - name: WANTED_GID
+              value: "1024"
+            {{- range $name, $value := .Values.env }}
+            - name: {{ $name }}
+              value: {{ $value | quote }}
+            {{- end }}
+            {{- if or .Values.auth.existingSecret .Values.auth.password }}
+            - name: HERMES_WEBUI_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "hermes-webui.secretName" . }}
+                  key: {{ .Values.auth.passwordKey }}
+            {{- end }}
+          {{- with .Values.extraEnvFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            {{- if .Values.persistentStorage.hermesHome.enabled }}
+            - name: hermes-home
+              mountPath: {{ .Values.persistentStorage.hermesHome.mountPath }}
+            {{- end }}
+            {{- if .Values.persistentStorage.workspace.enabled }}
+            - name: workspace
+              mountPath: {{ .Values.persistentStorage.workspace.mountPath }}
+            {{- end }}
+          livenessProbe:
+            {{- toYaml .Values.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.readinessProbe | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        {{- if .Values.persistentStorage.hermesHome.enabled }}
+        - name: hermes-home
+          persistentVolumeClaim:
+            claimName: {{ default (printf "%s-home" (include "hermes-webui.fullname" .)) .Values.persistentStorage.hermesHome.existingClaim }}
+        {{- end }}
+        {{- if .Values.persistentStorage.workspace.enabled }}
+        - name: workspace
+          persistentVolumeClaim:
+            claimName: {{ default (printf "%s-workspace" (include "hermes-webui.fullname" .)) .Values.persistentStorage.workspace.existingClaim }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

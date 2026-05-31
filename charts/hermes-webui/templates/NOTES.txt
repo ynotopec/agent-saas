@@ -1,0 +1,16 @@
+Hermes WebUI est déployé.
+
+Service Kubernetes:
+  {{ include "hermes-webui.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}
+
+{{- if not .Values.ingress.enabled }}
+Ingress non créé par ce chart. Configurez votre Ingress existant pour router vers:
+  serviceName: {{ include "hermes-webui.fullname" . }}
+  servicePort: http
+{{- else }}
+Ingress créé par ce chart.
+{{- end }}
+
+Stockage persistant:
+  HERMES_HOME: {{ .Values.persistentStorage.hermesHome.mountPath }}
+  Workspace:   {{ .Values.persistentStorage.workspace.mountPath }}

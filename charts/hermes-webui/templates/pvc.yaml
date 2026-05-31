@@ -1,0 +1,35 @@
+{{- if and .Values.persistentStorage.hermesHome.enabled (not .Values.persistentStorage.hermesHome.existingClaim) -}}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "hermes-webui.fullname" . }}-home
+  labels:
+    {{- include "hermes-webui.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    {{- toYaml .Values.persistentStorage.hermesHome.accessModes | nindent 4 }}
+  resources:
+    requests:
+      storage: {{ .Values.persistentStorage.hermesHome.size }}
+  {{- with .Values.persistentStorage.hermesHome.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+---
+{{- end }}
+{{- if and .Values.persistentStorage.workspace.enabled (not .Values.persistentStorage.workspace.existingClaim) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "hermes-webui.fullname" . }}-workspace
+  labels:
+    {{- include "hermes-webui.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    {{- toYaml .Values.persistentStorage.workspace.accessModes | nindent 4 }}
+  resources:
+    requests:
+      storage: {{ .Values.persistentStorage.workspace.size }}
+  {{- with .Values.persistentStorage.workspace.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+{{- end }}

@@ -1,0 +1,18 @@
+tenant:
+  id: acme
+
+auth:
+  existingSecret: hermes-webui-auth
+
+persistentStorage:
+  hermesHome:
+    size: 20Gi
+    storageClass: standard
+  workspace:
+    size: 100Gi
+    storageClass: standard
+
+# Ingress existant: le chart crée seulement le Service ClusterIP.
+# Configurez votre Ingress actuel pour pointer vers le service Helm.
+ingress:
+  enabled: false
