@@ -36,10 +36,16 @@ spec:
             - -ec
             - |
               target={{ .Values.env.HERMES_CONFIG_PATH | default (printf "%s/config.yaml" .Values.persistentStorage.hermesHome.mountPath) | quote }}
-              mkdir -p "$(dirname "$target")"
-              if [ {{ ternary "1" "0" .Values.hermesConfig.seed.overwrite | quote }} = "1" ] || [ ! -s "$target" ]; then
+              target_dir="$(dirname "$target")"
+              mkdir -p "$target_dir"
+              if [ -f /hermes-config/{{ .Values.hermesConfig.seed.secretKey }} ] && { [ {{ ternary "1" "0" .Values.hermesConfig.seed.overwrite | quote }} = "1" ] || [ ! -s "$target" ]; }; then
                 cp /hermes-config/{{ .Values.hermesConfig.seed.secretKey }} "$target"
                 chmod 600 "$target"
+              fi
+              env_target="$target_dir/.env"
+              if [ -f /hermes-config/{{ .Values.hermesConfig.seed.envSecretKey }} ] && { [ {{ ternary "1" "0" .Values.hermesConfig.seed.envOverwrite | quote }} = "1" ] || [ ! -s "$env_target" ]; }; then
+                cp /hermes-config/{{ .Values.hermesConfig.seed.envSecretKey }} "$env_target"
+                chmod 600 "$env_target"
               fi
           volumeMounts:
             - name: hermes-home

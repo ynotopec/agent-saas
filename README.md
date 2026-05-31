@@ -60,6 +60,7 @@ Les valeurs principales sont dans [`charts/hermes-webui/values.yaml`](charts/her
 - `auth.existingSecret` pour utiliser un secret géré hors Helm.
 - `hermesConfig.seed.*` pour précharger un `config.yaml` Hermes incluant un provider/modèle custom.
 - `extraEnvFrom` pour injecter des clés provider depuis des Secrets Kubernetes.
+- `env.HERMES_WEBUI_SKIP_ONBOARDING=1` pour éviter que le wizard de première connexion écrive un provider différent de celui préchargé par Helm.
 - `ingress.enabled`, `ingress.className`, `ingress.hosts` et `ingress.tls` si le chart doit créer l'Ingress.
 
 
@@ -70,7 +71,8 @@ Hermes lit les providers et modèles personnalisés depuis `config.yaml` dans `H
 Pour déclarer un endpoint OpenAI-compatible dès le déploiement, utilisez `examples/values-custom-model.yaml` ou fournissez un Secret existant via `hermesConfig.seed.existingSecret`. Le seed est copié dans le PVC avant le démarrage :
 
 - `overwrite=false` conserve un `config.yaml` déjà présent, ce qui évite d'écraser les modifications faites depuis Hermes WebUI ou `hermes model`.
-- `overwrite=true` force la recopie au prochain `helm upgrade`; utilisez-le temporairement si un PVC contient déjà une configuration incomplète où le provider `custom` n'apparaît pas.
+- `overwrite=true` force la recopie de `config.yaml` au prochain `helm upgrade`; utilisez-le temporairement si un PVC contient déjà une configuration incomplète où le provider `custom` n'apparaît pas.
+- `envConfig` permet aussi de précharger `.env`; avec `envOverwrite=true`, vous pouvez remplacer une ancienne `.env` qui contient par exemple `OPENAI_API_KEY` et qui fait afficher « API key configured » pour OpenAI alors que le tenant doit utiliser uniquement `custom`.
 
 ```bash
 helm upgrade --install hermes-acme ./charts/hermes-webui \
@@ -79,6 +81,10 @@ helm upgrade --install hermes-acme ./charts/hermes-webui \
 ```
 
 Si vous utilisez encore une image ancienne, redéployez avec le tag charté `0.51.185` ou plus récent : les tags GHCR de Hermes WebUI n'utilisent pas le préfixe `v`, et les versions récentes corrigent l'affichage des modèles/providers définis dans `config.yaml`.
+
+> Note: le panneau quota peut encore afficher `unsupported` pour `Custom`. Cela ne bloque pas l'utilisation du provider custom : Hermes WebUI ne sait pas calculer les quotas pour un endpoint OpenAI-compatible arbitraire. Le point important est que le modèle actif utilise `provider: custom:local`/`custom` et la `base_url` configurée.
+
+Pour corriger un PVC déjà initialisé avec OpenAI par erreur, faites un upgrade ponctuel avec `hermesConfig.seed.overwrite=true` et, si une ancienne `.env` contient `OPENAI_API_KEY`, `hermesConfig.seed.envOverwrite=true` avec un `envConfig` sans clé OpenAI. Remettez ensuite ces deux options à `false`.
 
 ## Exploitation
 
