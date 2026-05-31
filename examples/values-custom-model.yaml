@@ -16,40 +16,24 @@ persistentStorage:
 ingress:
   enabled: false
 
-# Déclare un provider custom OpenAI-compatible dès le premier démarrage.
-# Pour un PVC déjà créé avec un config.yaml incomplet, passez overwrite à true
-# le temps d'un helm upgrade, puis remettez-le à false pour laisser Hermes persister
-# les changements faits depuis l'UI/CLI.
+# Déclare un endpoint OpenAI-compatible dès le premier démarrage sans utiliser
+# un provider Hermes "custom". Cette version d'Hermes/WebUI peut ne pas exposer
+# Custom dans la liste des providers; on garde donc provider=openai-api et c'est
+# base_url qui force l'appel vers Ollama/LM Studio/vLLM/etc.
 hermesConfig:
+  openAICompatibleEndpoint:
+    enabled: true
+    provider: openai-api
+    model: qwen2.5-coder:32b
+    baseUrl: http://ollama.ollama.svc.cluster.local:11434/v1
+    apiKey: local
+    contextLength: 64000
   seed:
     enabled: true
     overwrite: false
     # Si le PVC contient déjà une ancienne .env avec OPENAI_API_KEY, activez
     # temporairement envOverwrite=true avec envConfig ci-dessous pour repartir
-    # sur le seul provider custom.
+    # sur le seul endpoint configuré dans config.yaml.
     envOverwrite: false
     envConfig: |
-      # Provider custom local keyless/Ollama: aucune clé OpenAI/Anthropic ici.
-    config: |
-      model:
-        default: qwen2.5-coder:32b
-        # Utiliser le slug nommé évite que WebUI/agent retombe sur OpenAI ou
-        # un provider générique quand un provider custom nommé existe.
-        provider: custom:local
-        base_url: http://ollama.ollama.svc.cluster.local:11434/v1
-        api_key: local
-        context_length: 64000
-      providers:
-        custom:
-          base_url: http://ollama.ollama.svc.cluster.local:11434/v1
-          api_key: local
-        "custom:local":
-          base_url: http://ollama.ollama.svc.cluster.local:11434/v1
-          api_key: local
-      custom_providers:
-        - name: local
-          base_url: http://ollama.ollama.svc.cluster.local:11434/v1
-          api_key: local
-          models:
-            qwen2.5-coder:32b:
-              context_length: 64000
+      # Endpoint local keyless/Ollama: aucune clé OpenAI/Anthropic ici.
