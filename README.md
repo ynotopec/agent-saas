@@ -78,7 +78,7 @@ helm upgrade --install hermes-acme ./charts/hermes-webui \
   -f examples/values-custom-model.yaml
 ```
 
-Si vous utilisez encore une image ancienne, redéployez avec le tag charté `v0.51.145` ou plus récent : les versions récentes de Hermes WebUI corrigent l'affichage des modèles/providers définis dans `config.yaml`.
+Si vous utilisez encore une image ancienne, redéployez avec le tag charté `0.51.185` ou plus récent : les tags GHCR de Hermes WebUI n'utilisent pas le préfixe `v`, et les versions récentes corrigent l'affichage des modèles/providers définis dans `config.yaml`.
 
 ## Exploitation
 

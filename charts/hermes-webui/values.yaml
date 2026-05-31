@@ -3,7 +3,7 @@ replicaCount: 1
 image:
   repository: ghcr.io/nesquena/hermes-webui
   # Version incluant les correctifs de découverte des providers/modèles custom.
-  tag: v0.51.145
+  tag: 0.51.185
   pullPolicy: IfNotPresent
 
 nameOverride: ""
