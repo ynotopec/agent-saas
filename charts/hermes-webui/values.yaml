@@ -61,10 +61,28 @@ env:
   HERMES_WEBUI_SKIP_ONBOARDING: "1"
 
 
-# Configuration Hermes initiale. Utile pour déclarer un provider/modèle custom dès le déploiement
-# et éviter de dépendre uniquement du wizard de première connexion.
+# Configuration Hermes initiale. Utile pour déclarer un endpoint OpenAI-compatible
+# dès le déploiement et éviter de dépendre uniquement du wizard de première connexion.
 # Le contenu est copié dans le PVC Hermes Home avant le démarrage de l'application.
 hermesConfig:
+  # Raccourci Helm pour créer un endpoint OpenAI-compatible sans utiliser de provider
+  # Hermes nommé "custom". Quand enabled=true et seed.config est vide, le chart
+  # génère uniquement le bloc model avec un provider connu et base_url; Hermes
+  # route alors directement vers base_url.
+  openAICompatibleEndpoint:
+    enabled: false
+    # Garder un provider connu par Hermes. base_url prend le dessus pour l'appel réel.
+    provider: openai-api
+    model: qwen2.5-coder:32b
+    baseUrl: http://ollama.ollama.svc.cluster.local:11434/v1
+    # Pour Ollama/local, une valeur factice évite les clients OpenAI qui exigent
+    # un token même si le serveur n'authentifie pas. Laissez vide si vous utilisez keyEnv.
+    apiKey: local
+    # Nom d'une variable d'environnement contenant la clé réelle (ex: TOGETHER_API_KEY).
+    # Si renseigné, api_key: ${VAR} est écrit dans config.yaml au lieu d'apiKey.
+    keyEnv: ""
+    contextLength: 64000
+    apiMode: chat_completions
   seed:
     enabled: false
     # Si overwrite=false, le fichier n'est copié que si HERMES_CONFIG_PATH n'existe pas déjà.

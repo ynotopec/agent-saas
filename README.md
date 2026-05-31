@@ -58,21 +58,39 @@ Les valeurs principales sont dans [`charts/hermes-webui/values.yaml`](charts/her
 - `image.repository` / `image.tag` pour choisir l'image Hermes WebUI.
 - `persistentStorage.*.size` et `persistentStorage.*.storageClass` pour dimensionner les PVC.
 - `auth.existingSecret` pour utiliser un secret géré hors Helm.
-- `hermesConfig.seed.*` pour précharger un `config.yaml` Hermes incluant un provider/modèle custom.
+- `hermesConfig.openAICompatibleEndpoint.*` pour déclarer directement une URL OpenAI-compatible sans utiliser de provider Hermes `custom`.
+- `hermesConfig.seed.*` pour précharger un `config.yaml` Hermes incluant un endpoint/modèle initial.
 - `extraEnvFrom` pour injecter des clés provider depuis des Secrets Kubernetes.
 - `env.HERMES_WEBUI_SKIP_ONBOARDING=1` pour éviter que le wizard de première connexion écrive un provider différent de celui préchargé par Helm.
 - `ingress.enabled`, `ingress.className`, `ingress.hosts` et `ingress.tls` si le chart doit créer l'Ingress.
 
 
-## Provider et modèle custom
+## Endpoint OpenAI-compatible
 
-Hermes lit les providers et modèles personnalisés depuis `config.yaml` dans `HERMES_HOME`. Le chart définit explicitement `HERMES_CONFIG_PATH=/home/hermeswebui/.hermes/config.yaml` et persiste ce répertoire dans le PVC `hermesHome`.
+Hermes lit le modèle et l'URL API depuis `config.yaml` dans `HERMES_HOME`. Le chart définit explicitement `HERMES_CONFIG_PATH=/home/hermeswebui/.hermes/config.yaml` et persiste ce répertoire dans le PVC `hermesHome`.
 
-Pour déclarer un endpoint OpenAI-compatible dès le déploiement, utilisez `examples/values-custom-model.yaml` ou fournissez un Secret existant via `hermesConfig.seed.existingSecret`. Le seed est copié dans le PVC avant le démarrage :
+Pour déclarer un endpoint OpenAI-compatible dès le déploiement, utilisez `examples/values-custom-model.yaml`. Cette configuration ne dépend plus d'un provider Hermes nommé `custom` : elle garde un provider connu (`openai-api` par défaut) et renseigne `model.base_url`, car Hermes route l'appel directement vers `base_url` quand ce champ est présent.
+
+```yaml
+hermesConfig:
+  openAICompatibleEndpoint:
+    enabled: true
+    provider: openai-api
+    model: qwen2.5-coder:32b
+    baseUrl: http://ollama.ollama.svc.cluster.local:11434/v1
+    apiKey: local
+    contextLength: 64000
+  seed:
+    enabled: true
+```
+
+Le `config.yaml` généré contient seulement le bloc `model` attendu par Hermes, par exemple `provider: openai-api` + `base_url: http://.../v1`. Il n'écrit plus `custom_providers` et n'utilise plus `provider: custom:<name>`, car cette version d'Hermes/WebUI peut ne pas connaître ce provider.
+
+Vous pouvez aussi fournir vous-même un `config.yaml` complet via `hermesConfig.seed.config` ou un Secret existant via `hermesConfig.seed.existingSecret`. Le seed est copié dans le PVC avant le démarrage :
 
 - `overwrite=false` conserve un `config.yaml` déjà présent, ce qui évite d'écraser les modifications faites depuis Hermes WebUI ou `hermes model`.
-- `overwrite=true` force la recopie de `config.yaml` au prochain `helm upgrade`; utilisez-le temporairement si un PVC contient déjà une configuration incomplète où le provider `custom` n'apparaît pas.
-- `envConfig` permet aussi de précharger `.env`; avec `envOverwrite=true`, vous pouvez remplacer une ancienne `.env` qui contient par exemple `OPENAI_API_KEY` et qui fait afficher « API key configured » pour OpenAI alors que le tenant doit utiliser uniquement `custom`.
+- `overwrite=true` force la recopie de `config.yaml` au prochain `helm upgrade`; utilisez-le temporairement si un PVC contient déjà une configuration incomplète ou une ancienne tentative avec `provider: custom`.
+- `envConfig` permet aussi de précharger `.env`; avec `envOverwrite=true`, vous pouvez remplacer une ancienne `.env` qui contient par exemple `OPENAI_API_KEY` alors que le tenant doit utiliser uniquement l'endpoint défini par `base_url`.
 
 ```bash
 helm upgrade --install hermes-acme ./charts/hermes-webui \
@@ -82,9 +100,9 @@ helm upgrade --install hermes-acme ./charts/hermes-webui \
 
 Si vous utilisez encore une image ancienne, redéployez avec le tag charté `0.51.185` ou plus récent : les tags GHCR de Hermes WebUI n'utilisent pas le préfixe `v`, et les versions récentes corrigent l'affichage des modèles/providers définis dans `config.yaml`.
 
-> Note: le panneau quota peut encore afficher `unsupported` pour `Custom`. Cela ne bloque pas l'utilisation du provider custom : Hermes WebUI ne sait pas calculer les quotas pour un endpoint OpenAI-compatible arbitraire. Le point important est que le modèle actif utilise `provider: custom:local`/`custom` et la `base_url` configurée.
+> Note: si le wizard WebUI ne liste pas de provider `Custom`, c'est précisément pour cela que le chart n'utilise plus `custom_providers`. Le point important est que le modèle actif possède une `base_url` OpenAI-compatible; le provider reste une valeur connue par Hermes.
 
-Pour corriger un PVC déjà initialisé avec OpenAI par erreur, faites un upgrade ponctuel avec `hermesConfig.seed.overwrite=true` et, si une ancienne `.env` contient `OPENAI_API_KEY`, `hermesConfig.seed.envOverwrite=true` avec un `envConfig` sans clé OpenAI. Remettez ensuite ces deux options à `false`.
+Pour corriger un PVC déjà initialisé avec OpenAI ou `custom` par erreur, faites un upgrade ponctuel avec `hermesConfig.seed.overwrite=true` et, si une ancienne `.env` contient `OPENAI_API_KEY`, `hermesConfig.seed.envOverwrite=true` avec un `envConfig` sans clé OpenAI. Remettez ensuite ces deux options à `false`.
 
 ## Exploitation
 

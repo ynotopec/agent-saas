@@ -1,6 +1,6 @@
 apiVersion: v2
 name: hermes-webui
-version: 0.2.2
+version: 0.2.4
 appVersion: "0.51.185"
 description: Helm chart pour déployer nesquena/hermes-webui en mode SaaS sur Kubernetes avec stockage persistant.
 type: application
