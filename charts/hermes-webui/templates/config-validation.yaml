@@ -1,18 +1,6 @@
 {{- if and .Values.hermesConfig.seed.enabled (not .Values.persistentStorage.hermesHome.enabled) -}}
 {{- fail "hermesConfig.seed.enabled requires persistentStorage.hermesHome.enabled=true so the generated config.yaml can be persisted" -}}
 {{- end -}}
-{{- if and .Values.hermesConfig.seed.enabled (not .Values.hermesConfig.seed.existingSecret) (not .Values.hermesConfig.seed.config) (not .Values.hermesConfig.seed.envConfig) (not .Values.hermesConfig.openAICompatibleEndpoint.enabled) -}}
-{{- fail "hermesConfig.seed.enabled requires hermesConfig.seed.config, hermesConfig.seed.envConfig, hermesConfig.seed.existingSecret, or hermesConfig.openAICompatibleEndpoint.enabled=true" -}}
-{{- end -}}
-{{- if and .Values.hermesConfig.openAICompatibleEndpoint.enabled (not .Values.hermesConfig.seed.enabled) -}}
-{{- fail "hermesConfig.openAICompatibleEndpoint.enabled requires hermesConfig.seed.enabled=true so the generated endpoint config can be copied into the Hermes home PVC" -}}
-{{- end -}}
-{{- if and .Values.hermesConfig.openAICompatibleEndpoint.enabled (not .Values.hermesConfig.openAICompatibleEndpoint.provider) -}}
-{{- fail "hermesConfig.openAICompatibleEndpoint.enabled requires hermesConfig.openAICompatibleEndpoint.provider" -}}
-{{- end -}}
-{{- if and .Values.hermesConfig.openAICompatibleEndpoint.enabled (not .Values.hermesConfig.openAICompatibleEndpoint.model) -}}
-{{- fail "hermesConfig.openAICompatibleEndpoint.enabled requires hermesConfig.openAICompatibleEndpoint.model" -}}
-{{- end -}}
-{{- if and .Values.hermesConfig.openAICompatibleEndpoint.enabled (not .Values.hermesConfig.openAICompatibleEndpoint.baseUrl) -}}
-{{- fail "hermesConfig.openAICompatibleEndpoint.enabled requires hermesConfig.openAICompatibleEndpoint.baseUrl" -}}
+{{- if and .Values.hermesConfig.seed.enabled (not .Values.hermesConfig.seed.existingSecret) (not .Values.hermesConfig.seed.config) (not .Values.hermesConfig.seed.envConfig) -}}
+{{- fail "hermesConfig.seed.enabled requires hermesConfig.seed.config, hermesConfig.seed.envConfig, or hermesConfig.seed.existingSecret" -}}
 {{- end -}}
