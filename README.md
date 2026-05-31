@@ -58,8 +58,27 @@ Les valeurs principales sont dans [`charts/hermes-webui/values.yaml`](charts/her
 - `image.repository` / `image.tag` pour choisir l'image Hermes WebUI.
 - `persistentStorage.*.size` et `persistentStorage.*.storageClass` pour dimensionner les PVC.
 - `auth.existingSecret` pour utiliser un secret géré hors Helm.
+- `hermesConfig.seed.*` pour précharger un `config.yaml` Hermes incluant un provider/modèle custom.
 - `extraEnvFrom` pour injecter des clés provider depuis des Secrets Kubernetes.
 - `ingress.enabled`, `ingress.className`, `ingress.hosts` et `ingress.tls` si le chart doit créer l'Ingress.
+
+
+## Provider et modèle custom
+
+Hermes lit les providers et modèles personnalisés depuis `config.yaml` dans `HERMES_HOME`. Le chart définit explicitement `HERMES_CONFIG_PATH=/home/hermeswebui/.hermes/config.yaml` et persiste ce répertoire dans le PVC `hermesHome`.
+
+Pour déclarer un endpoint OpenAI-compatible dès le déploiement, utilisez `examples/values-custom-model.yaml` ou fournissez un Secret existant via `hermesConfig.seed.existingSecret`. Le seed est copié dans le PVC avant le démarrage :
+
+- `overwrite=false` conserve un `config.yaml` déjà présent, ce qui évite d'écraser les modifications faites depuis Hermes WebUI ou `hermes model`.
+- `overwrite=true` force la recopie au prochain `helm upgrade`; utilisez-le temporairement si un PVC contient déjà une configuration incomplète où le provider `custom` n'apparaît pas.
+
+```bash
+helm upgrade --install hermes-acme ./charts/hermes-webui \
+  --namespace tenant-acme \
+  -f examples/values-custom-model.yaml
+```
+
+Si vous utilisez encore une image ancienne, redéployez avec le tag charté `v0.51.145` ou plus récent : les versions récentes de Hermes WebUI corrigent l'affichage des modèles/providers définis dans `config.yaml`.
 
 ## Exploitation
 

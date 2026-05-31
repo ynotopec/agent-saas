@@ -42,3 +42,8 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- define "hermes-webui.secretName" -}}
 {{- default (printf "%s-auth" (include "hermes-webui.fullname" .)) .Values.auth.existingSecret -}}
 {{- end -}}
+
+
+{{- define "hermes-webui.configSecretName" -}}
+{{- default (printf "%s-config" (include "hermes-webui.fullname" .)) .Values.hermesConfig.seed.existingSecret -}}
+{{- end -}}
