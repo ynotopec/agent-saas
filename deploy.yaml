@@ -1,0 +1,101 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agents-saas
+  namespace: demo1
+  labels:
+    app: agents-saas
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: agents-saas
+  template:
+    metadata:
+      labels:
+        app: agents-saas
+    spec:
+      serviceAccountName: agents-saas-sa
+      containers:
+      - name: agents-saas
+        image: python:3.12-slim
+        command: ["python3", "/app/app.py"]
+        ports:
+        - containerPort: 8000
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 3
+          periodSeconds: 10
+        resources:
+          limits:
+            cpu: "500m"
+            memory: 512Mi
+        volumeMounts:
+        - name: app-files
+          mountPath: /app
+        - name: pip-packages
+          mountPath: /usr/local/lib/python3.12/site-packages
+      initContainers:
+      - name: install-pip-packages
+        image: python:3.12-slim
+        command: ["pip3", "install", "fastapi", "uvicorn", "pydantic", "--target", "/packages"]
+        volumeMounts:
+        - name: pip-packages
+          mountPath: /packages
+      volumes:
+      - name: app-files
+        configMap:
+          name: agents-saas-app
+      - name: pip-packages
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agents-saas-svc
+  namespace: demo1
+  labels:
+    app: agents-saas
+spec:
+  type: ClusterIP
+  ports:
+  - port: 80
+    targetPort: 8000
+    protocol: TCP
+  selector:
+    app: agents-saas
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: agents-saas-ingress
+  namespace: demo1
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  ingressClassName: public
+  tls:
+  - hosts:
+    - agents-saas.ailab.infocepo.com
+    secretName: agents-saas-tls
+  rules:
+  - host: agents-saas.ailab.infocepo.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: agents-saas-svc
+            port:
+              number: 80
