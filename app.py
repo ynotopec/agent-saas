@@ -190,7 +190,7 @@ def deploy_instance(subdomain: str) -> dict:
                                     'echo "=== WebUI data ready ==="\n'
                                 ],
                                 "securityContext": {"runAsUser": 0},
-                                "resources": {"limits": {"cpu": "200m", "memory": "512Mi"}},
+                                "resources": {"limits": {"cpu": "200m", "memory": "2Gi"}},
                                 "volumeMounts": [
                                     {"mountPath": "/data", "name": "agent-data"}
                                 ]
@@ -275,7 +275,7 @@ def deploy_instance(subdomain: str) -> dict:
                                 "successThreshold": 1
                             },
                             "resources": {
-                                "limits": {"cpu": "500m", "memory": "512Mi"},
+                                "limits": {"cpu": "500m", "memory": "2Gi"},
                                 "requests": {"cpu": "100m", "memory": "128Mi"}
                             },
                             "securityContext": {
