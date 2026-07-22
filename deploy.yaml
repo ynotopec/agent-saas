@@ -23,6 +23,15 @@ spec:
         command: ["python3", "/app/app.py"]
         ports:
         - containerPort: 8000
+        env:
+        - name: LLM_BASE_URL
+          value: "https://api-nothink.ailab.infocepo.com/v1"
+        - name: LLM_API_KEY
+          value: "AntonioPacheco$999"
+        - name: LLM_PROVIDER
+          value: "infocepo-alias"
+        - name: LLM_MODEL
+          value: "ai-thinking"
         livenessProbe:
           httpGet:
             path: /health

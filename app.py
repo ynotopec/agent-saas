@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
-"""
-Simple FastAPI server for agents-saas dashboard.
-Uses K8s REST API directly (no kubectl needed).
-"""
+"""Simple FastAPI server for agents-saas dashboard. Uses K8s REST API directly."""
 import os
 import hashlib
 import json
@@ -16,10 +13,14 @@ class DeployRequest(BaseModel):
 
 app = FastAPI(title="Agent SaaS Dashboard")
 NAMESPACE = "demo1"
-
-# K8s ServiceAccount token and CA
 SA_TOKEN_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/token"
 CA_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+
+# Env vars for configurable LLM settings (defaults from local config)
+LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "https://api-nothink.ailab.infocepo.com/v1")
+LLM_API_KEY = os.environ.get("LLM_API_KEY", "AntonioPacheco$999")
+LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "infocepo-alias")
+LLM_MODEL = os.environ.get("LLM_MODEL", "ai-thinking")
 
 def get_token():
     try:
@@ -29,7 +30,6 @@ def get_token():
         return None
 
 def _api_base(resource_type):
-    """Build correct K8s API base URL based on resource type."""
     api_map = {
         "deployments": "apps/v1",
         "ingresses": "networking.k8s.io/v1",
@@ -70,12 +70,9 @@ def k8s_post(resource_type, body):
         data = json.dumps(body).encode()
         base = _api_base(resource_type)
         url = f"{base}/namespaces/{NAMESPACE}/{resource_type}"
-        req = urllib.request.Request(
-            url,
-            data=data,
+        req = urllib.request.Request(url, data=data,
             headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-            method="POST"
-        )
+            method="POST")
         with urllib.request.urlopen(req, cafile=CA_PATH) as resp:
             resp.read()
         return True
@@ -98,13 +95,42 @@ def list_instances():
             })
     return instances
 
+def build_config() -> str:
+    """Generate hermes config.yaml from env vars or defaults."""
+    nothink_api_key = os.environ.get("NOTHINK_API_KEY", "AntonioPacheco$999")
+    nothink_api_url = os.environ.get("NOTHINK_API_URL", "https://api-nothink.ailab.infocepo.com/v1")
+    toolsets = os.environ.get("HERMES_TOOLSETS", "hermes-cli")
+    return (
+        f"model:\n"
+        f"  default: {LLM_MODEL}\n"
+        f"  provider: {LLM_PROVIDER}\n"
+        f"  context_length: 262144\n"
+        f"  base_url: {LLM_BASE_URL}\n"
+        f"  api_key: {LLM_API_KEY}\n"
+        f"providers:\n"
+        f"  ai-nothink:\n"
+        f"    name: ai-nothink\n"
+        f"    type: openai\n"
+        f"    api_url: {nothink_api_url}\n"
+        f"    api_key: {nothink_api_key}\n"
+        f"fallback_providers: []\n"
+        f"custom_providers:\n"
+        f"  - name: {LLM_PROVIDER}\n"
+        f"    base_url: {LLM_BASE_URL}\n"
+        f"    api_key: {LLM_API_KEY}\n"
+        f"    model: {LLM_MODEL}\n"
+        f"toolsets:\n"
+        f"  - {toolsets}"
+    )
+
 def deploy_instance(subdomain: str) -> dict:
     hash8 = hashlib.sha256(datetime.now().isoformat().encode()).hexdigest()[:8]
     name = f"agent-{hash8}-{subdomain}"
     domain = f"{name}.{subdomain}.ailab.infocepo.com"
 
     try:
-        # Create PVCs
+        config = build_config()
+
         for pvc in [f"{name}-data", f"{name}-workspace"]:
             k8s_post("persistentvolumeclaims", {
                 "apiVersion": "v1", "kind": "PersistentVolumeClaim",
@@ -113,48 +139,168 @@ def deploy_instance(subdomain: str) -> dict:
                          "resources": {"requests": {"storage": "20Gi"}}}
             })
 
-        # Create ConfigMap
         k8s_post("configmaps", {
             "apiVersion": "v1", "kind": "ConfigMap",
             "metadata": {"name": f"{name}-config", "namespace": NAMESPACE, "labels": {"app": "agent-instance"}},
-            "data": {"config.yaml": "model:\n  default: ai-thinking\n  provider: custom\n  context_length: 262144\n  base_url: http://10.10.0.2:8571/v1\n  api_key: AntonioPacheco$999\nproviders:\n  ai-nothink:\n    name: ai-nothink\n    type: openai\n    api_url: https://api-nothink.ailab.infocepo.com/v1\n    api_key: AntonioPacheco$999\nfallback_providers: []\ntoolsets:\n  - hermes-cli"}
+            "data": {"config.yaml": config}
         })
 
-        # Create Deployment
-        k8s_post("deployments", {
-            "apiVersion": "apps/v1", "kind": "Deployment",
-            "metadata": {"name": name, "namespace": NAMESPACE, "labels": {"app": "agent-instance", "agent-instance": subdomain, "agent-hash": hash8}},
+        # Build the deployment manifest as a dict (mirrors the working hermes-webui deployment)
+        deployment_body = {
+            "apiVersion": "apps/v1",
+            "kind": "Deployment",
+            "metadata": {
+                "name": name,
+                "namespace": NAMESPACE,
+                "labels": {
+                    "app": "agent-instance",
+                    "agent-instance": subdomain,
+                    "agent-hash": hash8
+                }
+            },
             "spec": {
                 "replicas": 1,
-                "selector": {"matchLabels": {"app": "agent-instance", "agent-instance": subdomain}},
+                "selector": {
+                    "matchLabels": {
+                        "app": "agent-instance",
+                        "agent-instance": subdomain
+                    }
+                },
                 "template": {
-                    "metadata": {"labels": {"app": "agent-instance", "agent-instance": subdomain, "agent-hash": hash8}},
+                    "metadata": {
+                        "labels": {
+                            "app": "agent-instance",
+                            "agent-instance": subdomain,
+                            "agent-hash": hash8
+                        }
+                    },
                     "spec": {
+                        "initContainers": [
+                            # Init 1: copy initial data from image to PVC
+                            {
+                                "name": "init-webui-data",
+                                "image": "ghcr.io/nesquena/hermes-webui:latest",
+                                "command": ["sh", "-c"],
+                                "args": [
+                                    'echo "=== Initializing WebUI data ==="\n'
+                                    'mkdir -p /data\n'
+                                    'cp -a /home/hermeswebui/* /data/ 2>/dev/null || true\n'
+                                    'cp -a /home/hermeswebui/.bashrc /home/hermeswebui/.profile /data/ 2>/dev/null || true\n'
+                                    'chown -R 1024:1024 /data\n'
+                                    'echo "=== WebUI data ready ==="\n'
+                                ],
+                                "securityContext": {"runAsUser": 0},
+                                "resources": {"limits": {"cpu": "200m", "memory": "512Mi"}},
+                                "volumeMounts": [
+                                    {"mountPath": "/data", "name": "agent-data"}
+                                ]
+                            },
+                            # Init 2: copy hermes-agent source from image to PVC
+                            {
+                                "name": "copy-agent-src",
+                                "image": "nousresearch/hermes-agent:latest",
+                                "command": ["sh", "-c"],
+                                "args": [
+                                    'echo "=== Copying hermes-agent source ==="\n'
+                                    'mkdir -p /data/hermes-agent\n'
+                                    'cd /opt/hermes\n'
+                                    'if command -v rsync >/dev/null 2>&1; then\n'
+                                    '  rsync -a . /data/hermes-agent/\n'
+                                    'else\n'
+                                    '  cp -a . /data/hermes-agent/\n'
+                                    'fi\n'
+                                    'chown -R 1024:1024 /data\n'
+                                    'echo "=== Agent source copied ==="\n'
+                                    'ls -la /data/hermes-agent/\n'
+                                ],
+                                "securityContext": {"runAsUser": 0},
+                                "resources": {"limits": {"cpu": "500m", "memory": "1Gi"}},
+                                "volumeMounts": [
+                                    {"mountPath": "/data", "name": "agent-data"}
+                                ]
+                            },
+                            # Init 3: copy config.yaml from ConfigMap to PVC
+                            {
+                                "name": "copy-hermes-config",
+                                "image": "alpine:3.19",
+                                "command": ["sh", "-c"],
+                                "args": [
+                                    'cat /etc/hermes-config/config.yaml > /data/config.yaml &&\n'
+                                    'rm -rf /.hermes 2>/dev/null; ln -sf /home/hermeswebui/.hermes /.hermes &&\n'
+                                    'echo "Config copied + symlink created"\n'
+                                ],
+                                "securityContext": {"runAsUser": 0},
+                                "volumeMounts": [
+                                    {"mountPath": "/etc/hermes-config", "name": "hermes-config", "readOnly": True},
+                                    {"mountPath": "/data", "name": "agent-data"}
+                                ]
+                            }
+                        ],
                         "containers": [{
-                            "name": "webui", "image": "ghcr.io/nesquena/hermes-webui:latest",
-                            "imagePullPolicy": "Always", "ports": [{"containerPort": 8080}],
+                            "name": "webui",
+                            "image": "ghcr.io/nesquena/hermes-webui:latest",
+                            "imagePullPolicy": "Always",
+                            "command": ["/bin/bash", "-c"],
+                            "args": [
+                                "set -e\necho \"=== Hermes WebUI starting ===\"\necho \"Agent source:\"\nls -la /home/hermeswebui/.hermes/hermes-agent/ 2>/dev/null | head -20 || echo \"NOT FOUND\"\necho \"Starting...\"\nexec /hermeswebui_init.bash\n"
+                            ],
+                            "ports": [{"containerPort": 8080, "name": "http", "protocol": "TCP"}],
                             "env": [
                                 {"name": "HERMES_WEBUI_STATE_DIR", "value": "/home/hermeswebui/.hermes/webui"},
                                 {"name": "HERMES_WEBUI_PORT", "value": "8080"},
                                 {"name": "HERMES_WEBUI_HOST", "value": "0.0.0.0"},
+                                {"name": "HERMES_WEBUI_WORKSPACE", "value": "/workspace"},
                                 {"name": "HERMES_WEBUI_SKIP_ONBOARDING", "value": "1"},
-                                {"name": "HERMES_CONFIG", "value": "/etc/hermes-config/config.yaml"}
+                                {"name": "HERMES_WEBUI_PASSWORD"},
+                                {"name": "HERMES_HOME", "value": "/home/hermeswebui/.hermes"},
+                                {"name": "HERMES_CONFIG", "value": "/etc/hermes-config/config.yaml"},
+                                {"name": "LLM_BASE_URL", "value": LLM_BASE_URL},
+                                {"name": "LLM_API_KEY", "value": LLM_API_KEY},
+                                {"name": "LLM_PROVIDER", "value": LLM_PROVIDER},
+                                {"name": "LLM_MODEL", "value": LLM_MODEL},
                             ],
+                            "livenessProbe": {
+                                "httpGet": {"path": "/", "port": 8080, "scheme": "HTTP"},
+                                "initialDelaySeconds": 30,
+                                "periodSeconds": 30,
+                                "failureThreshold": 3,
+                                "timeoutSeconds": 5
+                            },
+                            "readinessProbe": {
+                                "httpGet": {"path": "/", "port": 8080, "scheme": "HTTP"},
+                                "initialDelaySeconds": 10,
+                                "periodSeconds": 10,
+                                "failureThreshold": 3,
+                                "timeoutSeconds": 5,
+                                "successThreshold": 1
+                            },
+                            "resources": {
+                                "limits": {"cpu": "500m", "memory": "512Mi"},
+                                "requests": {"cpu": "100m", "memory": "128Mi"}
+                            },
+                            "securityContext": {
+                                "runAsUser": 1024,
+                                "runAsNonRoot": True,
+                                "runAsGroup": 1024
+                            },
                             "volumeMounts": [
-                                {"name": "agent-data", "mountPath": "/home/hermeswebui/.hermes"},
-                                {"name": "hermes-config", "mountPath": "/etc/hermes-config", "readOnly": True}
+                                {"mountPath": "/home/hermeswebui/.hermes", "name": "agent-data"},
+                                {"mountPath": "/workspace", "name": "workspace-data"},
+                                {"mountPath": "/.hermes", "name": "agent-data"},
+                                {"mountPath": "/etc/hermes-config", "name": "hermes-config", "readOnly": True}
                             ]
                         }],
                         "volumes": [
                             {"name": "hermes-config", "configMap": {"name": f"{name}-config"}},
-                            {"name": "agent-data", "persistentVolumeClaim": {"claimName": f"{name}-data"}}
+                            {"name": "agent-data", "persistentVolumeClaim": {"claimName": f"{name}-data"}},
+                            {"name": "workspace-data", "persistentVolumeClaim": {"claimName": f"{name}-workspace"}}
                         ]
                     }
                 }
             }
-        })
+        }
+        k8s_post("deployments", deployment_body)
 
-        # Create Service
         k8s_post("services", {
             "apiVersion": "v1", "kind": "Service",
             "metadata": {"name": f"{name}-svc", "namespace": NAMESPACE, "labels": {"app": "agent-instance"}},
@@ -162,7 +308,6 @@ def deploy_instance(subdomain: str) -> dict:
                      "selector": {"app": "agent-instance", "agent-instance": subdomain}}
         })
 
-        # Create Ingress
         k8s_post("ingresses", {
             "apiVersion": "networking.k8s.io/v1", "kind": "Ingress",
             "metadata": {"name": f"{name}-ingress", "namespace": NAMESPACE,
@@ -176,7 +321,8 @@ def deploy_instance(subdomain: str) -> dict:
             }
         })
 
-        return {"success": True, "name": name, "subdomain": subdomain, "hash": hash8, "url": f"https://{domain}"}
+        return {"success": True, "name": name, "subdomain": subdomain, "hash": hash8,
+                "url": f"https://{domain}"}
     except Exception as e:
         return {"error": str(e)}
 
@@ -196,7 +342,7 @@ def api_deploy(req: DeployRequest):
 def health():
     return {"status": "ok"}
 
-CONTENT = '''<!DOCTYPE html>
+CONTENT = """<!DOCTYPE html>
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
@@ -293,7 +439,7 @@ CONTENT = '''<!DOCTYPE html>
         loadInstances();
     </script>
 </body>
-</html>'''
+</html>"""
 
 if __name__ == '__main__':
     import uvicorn
