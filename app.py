@@ -3,8 +3,9 @@
 import os
 import hashlib
 import json
+import re
 from datetime import datetime
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
@@ -21,6 +22,19 @@ LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "https://api-nothink.ailab.infocep
 LLM_API_KEY = os.environ.get("LLM_API_KEY", "")
 LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "infocepo-alias")
 LLM_MODEL = os.environ.get("LLM_MODEL", "ai-thinking")
+SUBDOMAIN_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+
+def validate_subdomain(subdomain: str) -> str:
+    """Return a Kubernetes/DNS-safe subdomain or raise ValueError."""
+    normalized = subdomain.strip()
+    if not SUBDOMAIN_RE.fullmatch(normalized):
+        raise ValueError(
+            "Subdomain must be 1-63 characters and contain only lowercase "
+            "letters, numbers, and single hyphens between characters."
+        )
+    if "--" in normalized:
+        raise ValueError("Subdomain must not contain consecutive hyphens.")
+    return normalized
 
 def get_token():
     try:
@@ -66,7 +80,7 @@ def k8s_post(resource_type, body):
     try:
         token = get_token()
         if not token:
-            return False
+            raise RuntimeError("Kubernetes service account token is unavailable")
         data = json.dumps(body).encode()
         base = _api_base(resource_type)
         url = f"{base}/namespaces/{NAMESPACE}/{resource_type}"
@@ -77,7 +91,7 @@ def k8s_post(resource_type, body):
             resp.read()
         return True
     except Exception as e:
-        return False
+        raise RuntimeError(f"Failed to create {resource_type}: {e}") from e
 
 def list_instances():
     res = k8s_get("pods", label_selector="app=agent-instance")
@@ -87,11 +101,12 @@ def list_instances():
         if labels.get("app") == "agent-instance":
             name = pod["metadata"]["name"]
             name_parts = name.replace("agent-", "").split("-", 1)
+            subdomain = labels.get("agent-instance") or (name_parts[1] if len(name_parts) > 1 else name)
             instances.append({
                 "name": name,
-                "subdomain": name_parts[1] if len(name_parts) > 1 else name,
-                "url": f"https://{name}.agents-saas.ailab.infocepo.com",
-                "status": "Running"
+                "subdomain": subdomain,
+                "url": f"https://{name}.{subdomain}.ailab.infocepo.com",
+                "status": pod.get("status", {}).get("phase", "Unknown")
             })
     return instances
 
@@ -124,6 +139,7 @@ def build_config() -> str:
     )
 
 def deploy_instance(subdomain: str) -> dict:
+    subdomain = validate_subdomain(subdomain)
     hash8 = hashlib.sha256(datetime.now().isoformat().encode()).hexdigest()[:8]
     name = f"agent-{hash8}-{subdomain}"
     domain = f"{name}.{subdomain}.ailab.infocepo.com"
@@ -336,7 +352,10 @@ def api_instances():
 
 @app.post("/api/deploy")
 def api_deploy(req: DeployRequest):
-    return JSONResponse(deploy_instance(req.subdomain))
+    try:
+        return JSONResponse(deploy_instance(req.subdomain))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 @app.get("/health")
 def health():
