@@ -62,7 +62,7 @@ def k8s_get(resource, label_selector=None):
     try:
         token = get_token()
         if not token:
-            return []
+            return {"items": []}
         base = _api_base(resource)
         url = f"{base}/namespaces/{NAMESPACE}/{resource}"
         if label_selector:
