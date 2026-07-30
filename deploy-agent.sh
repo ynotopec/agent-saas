@@ -13,7 +13,7 @@ INGRESS_CLASS="public"
 HASH=$(date +%s%N | sha256sum | cut -c1-8)
 PREFIX="agent-${HASH}"
 NAME="${PREFIX}-${SUBDOMAIN}"
-DOMAIN="${NAME}.${SUBDOMAIN}${DOMAIN_SUFFIX}"
+DOMAIN="${SUBDOMAIN}.ailab.infocepo.com"
 
 echo "=== Deploying ${NAME} ==="
 echo "Domain: ${DOMAIN}"
@@ -70,7 +70,7 @@ data:
       default: ai-thinking
       provider: custom
       context_length: 262144
-      base_url: http://10.10.0.2:8571/v1
+      base_url: https://api-nothink.ailab.infocepo.com/v1
       api_key: ${LLM_API_KEY}
     providers:
       ai-nothink:
@@ -109,156 +109,220 @@ spec:
         agent-instance: '${SUBDOMAIN}'
         agent-hash: '${HASH}'
     spec:
+      securityContext:
+        fsGroup: 1000
+        runAsGroup: 1000
+        runAsUser: 1000
+      initContainers:
+      - name: init-hermes-home
+        image: alpine:3.19
+        command: ["sh", "-c"]
+        args: ["mkdir -p /hermes-home/.hermes/webui /workspace && echo '# Hermes workspace' > /workspace/.gitkeep && if [ -f /configmap/config.yaml ]; then cp /configmap/config.yaml /hermes-home/config.yaml && echo 'config.yaml copied to PVC root'; fi && echo '=== Init done ==='"]
+        resources: {limits: {cpu: "50m", memory: 64Mi}}
+        securityContext: {runAsUser: 0}
+        volumeMounts:
+        - mountPath: /hermes-home
+          name: hermes-home
+        - mountPath: /workspace
+          name: workspace-data
+        - mountPath: /configmap
+          name: hermes-config
+          readOnly: true
+      - name: init-agent-src
+        image: nousresearch/hermes-agent:latest
+        imagePullPolicy: Always
+        command: ["sh", "-c"]
+        args: ["mkdir -p /hermes-home/hermes-agent && if [ -d /opt/hermes ]; then cp -r /opt/hermes/* /hermes-home/hermes-agent/ 2>/dev/null || true; echo 'hermes-agent source copied to PVC'; ls -la /hermes-home/hermes-agent/ | head -10; fi && chown -R 1000:1000 /hermes-home 2>/dev/null || true && echo '=== Init done ==='"]
+        resources: {limits: {cpu: "200m", memory: 1Gi}}
+        securityContext: {runAsUser: 0}
+        volumeMounts:
+        - mountPath: /hermes-home
+          name: hermes-home
       containers:
-      - args:
-          - |
-            set -e
-            echo "=== Hermes WebUI starting ==="
-            echo "Agent source:"
-            ls -la /home/hermeswebui/.hermes/hermes-agent/ 2>/dev/null | head -20 || echo "NOT FOUND"
-            echo "Starting..."
-            exec /hermeswebui_init.bash
-        command:
-        - /bin/bash
-        - -c
+      - name: hermes-agent
+        image: nousresearch/hermes-agent:latest
+        imagePullPolicy: Always
+        command: ["sh", "-c"]
+        args: ["hermes gateway run --no-supervise --force"]
+        ports:
+        - containerPort: 8642
+          name: gateway
+          protocol: TCP
         env:
+        - name: HERMES_HOME
+          value: /home/hermes/.hermes
+        - name: HERMES_UID
+          value: "1000"
+        - name: HERMES_GID
+          value: "1000"
+        - name: LLM_BASE_URL
+          value: https://api-nothink.ailab.infocepo.com/v1
+        - name: LLM_API_KEY
+          value: "${LLM_API_KEY}"
+        - name: LLM_PROVIDER
+          value: infocepo-alias
+        - name: LLM_MODEL
+          value: ai-thinking
+        - name: HERMES_ALLOW_ROOT_GATEWAY
+          value: "1"
+        - name: HERMES_ACCEPT_HOOKS
+          value: "1"
+        - name: HERMES_DONT_CHECK_TTY
+          value: "1"
+        - name: HERMES_GATEWAY_NO_SUPERVISE
+          value: "1"
+        - name: MCP_DISABLE
+          value: "1"
+        - name: HERMES_CONFIG
+          value: /etc/hermes-config/config.yaml
+        - name: API_SERVER_KEY
+          value: ce1dfb04ec3c143320c9ed3d348e32d85d5144898547875d86ad382ae184b88e
+        readinessProbe:
+          exec:
+            command: ["sh", "-c", "python3 -c 'import socket; s=socket.socket(); s.settimeout(2); r=s.connect_ex((\"127.0.0.1\",8642)); s.close(); exit(0 if r==0 else 1)'"]
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          failureThreshold: 30
+          successThreshold: 1
+          timeoutSeconds: 5
+        resources:
+          limits: {cpu: "2", memory: 4Gi}
+          requests: {cpu: 25m, memory: 128Mi}
+        securityContext: {runAsUser: 1000, runAsGroup: 1000}
+        volumeMounts:
+        - mountPath: /home/hermes/.hermes
+          name: hermes-home
+        - mountPath: /workspace
+          name: workspace-data
+        - mountPath: /etc/hermes-config
+          name: hermes-config
+          readOnly: true
+      - name: hermes-dashboard
+        image: nousresearch/hermes-agent:latest
+        imagePullPolicy: Always
+        command: ["hermes", "dashboard", "--host", "127.0.0.1"]
+        ports:
+        - containerPort: 9119
+          name: dashboard
+          protocol: TCP
+        env:
+        - name: HERMES_HOME
+          value: /home/hermes/.hermes
+        - name: HERMES_UID
+          value: "1000"
+        - name: HERMES_GID
+          value: "1000"
+        - name: GATEWAY_HEALTH_URL
+          value: http://127.0.0.1:8642
+        - name: HERMES_CONFIG
+          value: /etc/hermes-config/config.yaml
+        - name: PATH
+          value: /opt/hermes/bin:/opt/hermes/.venv/bin:/opt/data/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+        readinessProbe:
+          exec:
+            command: ["sh", "-c", "python3 -c 'import socket; s=socket.socket(); s.settimeout(2); r=s.connect_ex((\"127.0.0.1\",9119)); s.close(); exit(0 if r==0 else 1)'"]
+          initialDelaySeconds: 45
+          periodSeconds: 15
+          failureThreshold: 3
+          successThreshold: 1
+          timeoutSeconds: 10
+        livenessProbe:
+          exec:
+            command: ["sh", "-c", "python3 -c 'import socket; s=socket.socket(); s.settimeout(2); r=s.connect_ex((\"127.0.0.1\",9119)); s.close(); exit(0 if r==0 else 1)'"]
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          failureThreshold: 3
+          successThreshold: 1
+          timeoutSeconds: 10
+        resources:
+          limits: {cpu: "500m", memory: 512Mi}
+          requests: {cpu: 25m, memory: 64Mi}
+        securityContext: {runAsUser: 1000, runAsGroup: 1000}
+        volumeMounts:
+        - mountPath: /home/hermes/.hermes
+          name: hermes-home
+        - mountPath: /etc/hermes-config
+          name: hermes-config
+          readOnly: true
+      - name: hermes-webui
+        image: ghcr.io/nesquena/hermes-webui:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8787
+          name: webui
+          protocol: TCP
+        env:
+        - name: HERMES_WEBUI_HOST
+          value: 0.0.0.0
+        - name: HERMES_WEBUI_PORT
+          value: "8787"
         - name: HERMES_WEBUI_STATE_DIR
           value: /home/hermeswebui/.hermes/webui
-        - name: HERMES_WEBUI_PORT
-          value: "8080"
-        - name: HERMES_WEBUI_HOST
-          value: "0.0.0.0"
-        - name: HERMES_WEBUI_WORKSPACE
-          value: /workspace
-        - name: HERMES_WEBUI_SKIP_ONBOARDING
-          value: "1"
+        - name: HERMES_API_URL
+          value: http://127.0.0.1:8642
         - name: HERMES_HOME
           value: /home/hermeswebui/.hermes
         - name: HERMES_CONFIG
           value: /etc/hermes-config/config.yaml
-        image: ghcr.io/nesquena/hermes-webui:latest
-        imagePullPolicy: Always
-        livenessProbe:
-          httpGet:
-            path: /
-            port: 8080
-            scheme: HTTP
-          initialDelaySeconds: 30
-          periodSeconds: 30
-        name: webui
-        ports:
-        - containerPort: 8080
-          name: http
-          protocol: TCP
+        - name: PYTHONPATH
+          value: /home/hermeswebui/.hermes/hermes-agent
+        - name: HERMES_NIX_BUILD
+          value: "1"
+        - name: WANTED_UID
+          value: "1000"
+        - name: WANTED_GID
+          value: "1000"
+        - name: HERMES_WEBUI_ONBOARDING_OPEN
+          value: "1"
+        - name: HERMES_WEBUI_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: "${NAME}-webui-secret"
+              key: password
         readinessProbe:
           httpGet:
             path: /
-            port: 8080
+            port: 8787
             scheme: HTTP
-          initialDelaySeconds: 10
-          periodSeconds: 10
+          initialDelaySeconds: 30
+          periodSeconds: 15
+          failureThreshold: 3
+          successThreshold: 1
+          timeoutSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 8787
+            scheme: HTTP
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          failureThreshold: 3
+          successThreshold: 1
+          timeoutSeconds: 10
         resources:
-          limits:
-            cpu: "4"
-            memory: 4Gi
-          requests:
-            cpu: 500m
-            memory: 1Gi
-        securityContext:
-          runAsGroup: 1024
-          runAsNonRoot: true
-          runAsUser: 1024
+          limits: {cpu: "500m", memory: 2Gi}
+          requests: {cpu: 25m, memory: 128Mi}
+        securityContext: {runAsUser: 0, runAsGroup: 0}
         volumeMounts:
         - mountPath: /home/hermeswebui/.hermes
-          name: agent-data
+          name: hermes-home
         - mountPath: /workspace
           name: workspace-data
-        - mountPath: /.hermes
-          name: agent-data
         - mountPath: /etc/hermes-config
           name: hermes-config
           readOnly: true
-      initContainers:
-      - args:
-          - |
-            echo "=== Initializing WebUI data ==="
-            mkdir -p /data
-            cp -a /home/hermeswebui/* /data/ 2>/dev/null || true
-            cp -a /home/hermeswebui/.bashrc /home/hermeswebui/.profile /data/ 2>/dev/null || true
-            chown -R 1024:1024 /data
-            echo "=== WebUI data ready ==="
-        command:
-        - sh
-        - -c
-        image: ghcr.io/nesquena/hermes-webui:latest
-        imagePullPolicy: Always
-        name: init-webui-data
-        resources:
-          limits:
-            cpu: 200m
-            memory: 512Mi
-        securityContext:
-          runAsUser: 0
-        volumeMounts:
-        - mountPath: /data
-          name: agent-data
-      - args:
-          - |
-            echo "=== Copying hermes-agent source ==="
-            mkdir -p /data/hermes-agent
-            cd /opt/hermes
-            if command -v rsync >/dev/null 2>&1; then
-              rsync -a . /data/hermes-agent/
-            else
-              cp -a . /data/hermes-agent/
-            fi
-            chown -R 1024:1024 /data
-            echo "=== Agent source copied ==="
-        command:
-        - sh
-        - -c
-        image: nousresearch/hermes-agent:latest
-        imagePullPolicy: Always
-        name: copy-agent-src
-        resources:
-          limits:
-            cpu: 500m
-            memory: 1Gi
-        securityContext:
-          runAsUser: 0
-        volumeMounts:
-        - mountPath: /data
-          name: agent-data
-      - name: copy-hermes-config
-        image: alpine:3.19
-        command:
-        - sh
-        - -c
-        - |
-          cat /etc/hermes-config/config.yaml > /data/config.yaml &&
-          echo "Config copied to /data/config.yaml"
-        securityContext:
-          runAsUser: 0
-        volumeMounts:
-        - name: hermes-config
-          mountPath: /etc/hermes-config
-          readOnly: true
-        - name: agent-data
-          mountPath: /data
       restartPolicy: Always
-      securityContext: {}
       terminationGracePeriodSeconds: 30
       volumes:
       - name: hermes-config
         configMap:
           name: ${NAME}-config
-      - name: agent-data
+      - name: hermes-home
         persistentVolumeClaim:
           claimName: ${NAME}-data
       - name: workspace-data
         persistentVolumeClaim:
-          claimName: ${NAME}-workspace
-EOF
+          claimName: ${NAME}-workspaceEOF
 
 # Create Service
 cat <<EOF | kubectl --kubeconfig="${KUBECONFIG}" apply -f -
@@ -273,7 +337,7 @@ spec:
   type: ClusterIP
   ports:
   - port: 80
-    targetPort: 8080
+    targetPort: 8787
     protocol: TCP
     name: http
   selector:

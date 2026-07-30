@@ -207,124 +207,203 @@ def deploy_instance(subdomain: str) -> dict:
                         }
                     },
                     "spec": {
+                        "securityContext": {
+                            "fsGroup": 1000,
+                            "runAsGroup": 1000,
+                            "runAsUser": 1000
+                        },
                         "initContainers": [
-                            # Init 1: copy initial data from image to PVC
                             {
-                                "name": "init-webui-data",
-                                "image": "ghcr.io/nesquena/hermes-webui:latest",
-                                "command": ["sh", "-c"],
-                                "args": [
-                                    'echo "=== Initializing WebUI data ==="\n'
-                                    'mkdir -p /data\n'
-                                    'cp -a /home/hermeswebui/* /data/ 2>/dev/null || true\n'
-                                    'cp -a /home/hermeswebui/.bashrc /home/hermeswebui/.profile /data/ 2>/dev/null || true\n'
-                                    'chown -R 1024:1024 /data\n'
-                                    'echo "=== WebUI data ready ==="\n'
-                                ],
-                                "securityContext": {"runAsUser": 0},
-                                "resources": {"limits": {"cpu": "200m", "memory": "2Gi"}},
-                                "volumeMounts": [
-                                    {"mountPath": "/data", "name": "agent-data"}
-                                ]
-                            },
-                            # Init 2: copy hermes-agent source from image to PVC
-                            {
-                                "name": "copy-agent-src",
-                                "image": "nousresearch/hermes-agent:latest",
-                                "command": ["sh", "-c"],
-                                "args": [
-                                    'echo "=== Copying hermes-agent source ==="\n'
-                                    'mkdir -p /data/hermes-agent\n'
-                                    'cd /opt/hermes\n'
-                                    'if command -v rsync >/dev/null 2>&1; then\n'
-                                    '  rsync -a . /data/hermes-agent/\n'
-                                    'else\n'
-                                    '  cp -a . /data/hermes-agent/\n'
-                                    'fi\n'
-                                    'chown -R 1024:1024 /data\n'
-                                    'echo "=== Agent source copied ==="\n'
-                                    'ls -la /data/hermes-agent/\n'
-                                ],
-                                "securityContext": {"runAsUser": 0},
-                                "resources": {"limits": {"cpu": "500m", "memory": "1Gi"}},
-                                "volumeMounts": [
-                                    {"mountPath": "/data", "name": "agent-data"}
-                                ]
-                            },
-                            # Init 3: copy config.yaml from ConfigMap to PVC
-                            {
-                                "name": "copy-hermes-config",
+                                "name": "init-hermes-home",
                                 "image": "alpine:3.19",
                                 "command": ["sh", "-c"],
                                 "args": [
-                                    'cat /etc/hermes-config/config.yaml > /data/config.yaml &&\n'
-                                    'rm -rf /.hermes 2>/dev/null; ln -sf /home/hermeswebui/.hermes /.hermes &&\n'
-                                    'echo "Config copied + symlink created"\n'
+                                    "mkdir -p /hermes-home/.hermes/webui /workspace && "
+                                    "echo '# Hermes workspace' > /workspace/.gitkeep && "
+                                    "if [ -f /configmap/config.yaml ]; then "
+                                    "cp /configmap/config.yaml /hermes-home/config.yaml && "
+                                    "echo 'config.yaml copied to PVC root'; fi && "
+                                    "echo '=== Init done ==='"
                                 ],
+                                "resources": {"limits": {"cpu": "50m", "memory": "64Mi"}},
                                 "securityContext": {"runAsUser": 0},
                                 "volumeMounts": [
-                                    {"mountPath": "/etc/hermes-config", "name": "hermes-config", "readOnly": True},
-                                    {"mountPath": "/data", "name": "agent-data"}
+                                    {"mountPath": "/hermes-home", "name": "hermes-home"},
+                                    {"mountPath": "/workspace", "name": "workspace-data"},
+                                    {"mountPath": "/configmap", "name": "hermes-config", "readOnly": True}
+                                ]
+                            },
+                            {
+                                "name": "init-agent-src",
+                                "image": "nousresearch/hermes-agent:latest",
+                                "imagePullPolicy": "Always",
+                                "command": ["sh", "-c"],
+                                "args": [
+                                    "mkdir -p /hermes-home/hermes-agent && "
+                                    "if [ -d /opt/hermes ]; then "
+                                    "cp -r /opt/hermes/* /hermes-home/hermes-agent/ 2>/dev/null || true; "
+                                    "echo 'hermes-agent source copied to PVC'; "
+                                    "ls -la /hermes-home/hermes-agent/ | head -10; "
+                                    "fi && "
+                                    "chown -R 1000:1000 /hermes-home 2>/dev/null || true && "
+                                    "echo '=== Init done ==='"
+                                ],
+                                "resources": {"limits": {"cpu": "200m", "memory": "1Gi"}},
+                                "securityContext": {"runAsUser": 0},
+                                "volumeMounts": [
+                                    {"mountPath": "/hermes-home", "name": "hermes-home"}
                                 ]
                             }
                         ],
-                        "containers": [{
-                            "name": "webui",
-                            "image": "ghcr.io/nesquena/hermes-webui:latest",
-                            "imagePullPolicy": "Always",
-                            "command": ["/bin/bash", "-c"],
-                            "args": [
-                                "set -e\necho \"=== Hermes WebUI starting ===\"\necho \"Agent source:\"\nls -la /home/hermeswebui/.hermes/hermes-agent/ 2>/dev/null | head -20 || echo \"NOT FOUND\"\necho \"Starting...\"\nexec /hermeswebui_init.bash\n"
-                            ],
-                            "ports": [{"containerPort": 8787, "name": "http", "protocol": "TCP"}],
-                            "env": [
-                                {"name": "HERMES_WEBUI_STATE_DIR", "value": "/home/hermeswebui/.hermes/webui"},
-                                {"name": "HERMES_WEBUI_PORT", "value": "8787"},
-                                {"name": "HERMES_WEBUI_HOST", "value": "0.0.0.0"},
-                                {"name": "HERMES_WEBUI_WORKSPACE", "value": "/workspace"},
-                                {"name": "HERMES_WEBUI_SKIP_ONBOARDING", "value": "1"},
-                                {"name": "HERMES_WEBUI_PASSWORD", "valueFrom": {"secretKeyRef": {"name": f"{name}-webui-secret", "key": "password"}}},
-                                {"name": "HERMES_HOME", "value": "/home/hermeswebui/.hermes"},
-                                {"name": "HERMES_CONFIG", "value": "/etc/hermes-config/config.yaml"},
-                                {"name": "LLM_BASE_URL", "value": LLM_BASE_URL},
-                                {"name": "LLM_API_KEY", "value": LLM_API_KEY},
-                                {"name": "LLM_PROVIDER", "value": LLM_PROVIDER},
-                                {"name": "LLM_MODEL", "value": LLM_MODEL},
-                            ],
-                            "livenessProbe": {
-                                "httpGet": {"path": "/", "port": 8787, "scheme": "HTTP"},
-                                "initialDelaySeconds": 30,
-                                "periodSeconds": 30,
-                                "failureThreshold": 3,
-                                "timeoutSeconds": 5
+                        "containers": [
+                            {
+                                "name": "hermes-agent",
+                                "image": "nousresearch/hermes-agent:latest",
+                                "imagePullPolicy": "Always",
+                                "command": ["sh", "-c"],
+                                "args": ["hermes gateway run --no-supervise --force"],
+                                "ports": [{"containerPort": 8642, "name": "gateway", "protocol": "TCP"}],
+                                "readinessProbe": {
+                                    "exec": {
+                                        "command": [
+                                            "sh", "-c",
+                                            "python3 -c 'import socket; s=socket.socket(); s.settimeout(2); r=s.connect_ex((\x27127.0.0.1\x27,8642)); s.close(); exit(0 if r==0 else 1)'"
+                                        ]
+                                    },
+                                    "initialDelaySeconds": 30,
+                                    "periodSeconds": 10,
+                                    "failureThreshold": 30,
+                                    "successThreshold": 1,
+                                    "timeoutSeconds": 5
+                                },
+                                "resources": {
+                                    "limits": {"cpu": "2", "memory": "4Gi"},
+                                    "requests": {"cpu": "25m", "memory": "128Mi"}
+                                },
+                                "securityContext": {"runAsUser": 1000, "runAsGroup": 1000},
+                                "volumeMounts": [
+                                    {"mountPath": "/home/hermes/.hermes", "name": "hermes-home"},
+                                    {"mountPath": "/workspace", "name": "workspace-data"},
+                                    {"mountPath": "/etc/hermes-config", "name": "hermes-config", "readOnly": True}
+                                ],
+                                "env": [
+                                    {"name": "HERMES_HOME", "value": "/home/hermes/.hermes"},
+                                    {"name": "HERMES_UID", "value": "1000"},
+                                    {"name": "HERMES_GID", "value": "1000"},
+                                    {"name": "LLM_BASE_URL", "value": LLM_BASE_URL},
+                                    {"name": "LLM_API_KEY", "value": LLM_API_KEY},
+                                    {"name": "LLM_PROVIDER", "value": LLM_PROVIDER},
+                                    {"name": "LLM_MODEL", "value": LLM_MODEL},
+                                    {"name": "HERMES_ALLOW_ROOT_GATEWAY", "value": "1"},
+                                    {"name": "HERMES_ACCEPT_HOOKS", "value": "1"},
+                                    {"name": "HERMES_DONT_CHECK_TTY", "value": "1"},
+                                    {"name": "HERMES_GATEWAY_NO_SUPERVISE", "value": "1"},
+                                    {"name": "MCP_DISABLE", "value": "1"},
+                                    {"name": "HERMES_CONFIG", "value": "/etc/hermes-config/config.yaml"},
+                                    {"name": "API_SERVER_KEY", "value": "ce1dfb04ec3c143320c9ed3d348e32d85d5144898547875d86ad382ae184b88e"}
+                                ]
                             },
-                            "readinessProbe": {
-                                "httpGet": {"path": "/", "port": 8787, "scheme": "HTTP"},
-                                "initialDelaySeconds": 10,
-                                "periodSeconds": 10,
-                                "failureThreshold": 3,
-                                "timeoutSeconds": 5,
-                                "successThreshold": 1
+                            {
+                                "name": "hermes-dashboard",
+                                "image": "nousresearch/hermes-agent:latest",
+                                "imagePullPolicy": "Always",
+                                "command": ["hermes", "dashboard", "--host", "127.0.0.1"],
+                                "ports": [{"containerPort": 9119, "name": "dashboard", "protocol": "TCP"}],
+                                "readinessProbe": {
+                                    "exec": {
+                                        "command": [
+                                            "sh", "-c",
+                                            "python3 -c 'import socket; s=socket.socket(); s.settimeout(2); r=s.connect_ex((\x27127.0.0.1\x27,9119)); s.close(); exit(0 if r==0 else 1)'"
+                                        ]
+                                    },
+                                    "initialDelaySeconds": 45,
+                                    "periodSeconds": 15,
+                                    "failureThreshold": 3,
+                                    "successThreshold": 1,
+                                    "timeoutSeconds": 10
+                                },
+                                "livenessProbe": {
+                                    "exec": {
+                                        "command": [
+                                            "sh", "-c",
+                                            "python3 -c 'import socket; s=socket.socket(); s.settimeout(2); r=s.connect_ex((\x27127.0.0.1\x27,9119)); s.close(); exit(0 if r==0 else 1)'"
+                                        ]
+                                    },
+                                    "initialDelaySeconds": 60,
+                                    "periodSeconds": 30,
+                                    "failureThreshold": 3,
+                                    "successThreshold": 1,
+                                    "timeoutSeconds": 10
+                                },
+                                "resources": {
+                                    "limits": {"cpu": "500m", "memory": "512Mi"},
+                                    "requests": {"cpu": "25m", "memory": "64Mi"}
+                                },
+                                "securityContext": {"runAsUser": 1000, "runAsGroup": 1000},
+                                "volumeMounts": [
+                                    {"mountPath": "/home/hermes/.hermes", "name": "hermes-home"},
+                                    {"mountPath": "/etc/hermes-config", "name": "hermes-config", "readOnly": True}
+                                ],
+                                "env": [
+                                    {"name": "HERMES_HOME", "value": "/home/hermes/.hermes"},
+                                    {"name": "HERMES_UID", "value": "1000"},
+                                    {"name": "HERMES_GID", "value": "1000"},
+                                    {"name": "GATEWAY_HEALTH_URL", "value": "http://127.0.0.1:8642"},
+                                    {"name": "HERMES_CONFIG", "value": "/etc/hermes-config/config.yaml"},
+                                    {"name": "PATH", "value": "/opt/hermes/bin:/opt/hermes/.venv/bin:/opt/data/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}
+                                ]
                             },
-                            "resources": {
-                                "limits": {"cpu": "500m", "memory": "2Gi"},
-                                "requests": {"cpu": "100m", "memory": "128Mi"}
-                            },
-                            "securityContext": {
-                                "runAsUser": 1024,
-                                "runAsNonRoot": True,
-                                "runAsGroup": 1024
-                            },
-                            "volumeMounts": [
-                                {"mountPath": "/home/hermeswebui/.hermes", "name": "agent-data"},
-                                {"mountPath": "/workspace", "name": "workspace-data"},
-                                {"mountPath": "/.hermes", "name": "agent-data"},
-                                {"mountPath": "/etc/hermes-config", "name": "hermes-config", "readOnly": True}
-                            ]
-                        }],
+                            {
+                                "name": "hermes-webui",
+                                "image": "ghcr.io/nesquena/hermes-webui:latest",
+                                "imagePullPolicy": "Always",
+                                "ports": [{"containerPort": 8787, "name": "webui", "protocol": "TCP"}],
+                                "readinessProbe": {
+                                    "httpGet": {"path": "/", "port": 8787, "scheme": "HTTP"},
+                                    "initialDelaySeconds": 30,
+                                    "periodSeconds": 15,
+                                    "failureThreshold": 3,
+                                    "successThreshold": 1,
+                                    "timeoutSeconds": 10
+                                },
+                                "livenessProbe": {
+                                    "httpGet": {"path": "/", "port": 8787, "scheme": "HTTP"},
+                                    "initialDelaySeconds": 60,
+                                    "periodSeconds": 30,
+                                    "failureThreshold": 3,
+                                    "successThreshold": 1,
+                                    "timeoutSeconds": 10
+                                },
+                                "resources": {
+                                    "limits": {"cpu": "500m", "memory": "2Gi"},
+                                    "requests": {"cpu": "25m", "memory": "128Mi"}
+                                },
+                                "securityContext": {"runAsUser": 0, "runAsGroup": 0},
+                                "volumeMounts": [
+                                    {"mountPath": "/home/hermeswebui/.hermes", "name": "hermes-home"},
+                                    {"mountPath": "/workspace", "name": "workspace-data"},
+                                    {"mountPath": "/etc/hermes-config", "name": "hermes-config", "readOnly": True}
+                                ],
+                                "env": [
+                                    {"name": "HERMES_WEBUI_HOST", "value": "0.0.0.0"},
+                                    {"name": "HERMES_WEBUI_PORT", "value": "8787"},
+                                    {"name": "HERMES_WEBUI_STATE_DIR", "value": "/home/hermeswebui/.hermes/webui"},
+                                    {"name": "HERMES_API_URL", "value": "http://127.0.0.1:8642"},
+                                    {"name": "HERMES_HOME", "value": "/home/hermeswebui/.hermes"},
+                                    {"name": "HERMES_CONFIG", "value": "/etc/hermes-config/config.yaml"},
+                                    {"name": "PYTHONPATH", "value": "/home/hermeswebui/.hermes/hermes-agent"},
+                                    {"name": "HERMES_NIX_BUILD", "value": "1"},
+                                    {"name": "WANTED_UID", "value": "1000"},
+                                    {"name": "WANTED_GID", "value": "1000"},
+                                    {"name": "HERMES_WEBUI_ONBOARDING_OPEN", "value": "1"},
+                                    {"name": "HERMES_WEBUI_PASSWORD",
+                                     "valueFrom": {"secretKeyRef": {"name": f"{name}-webui-secret", "key": "password"}}}
+                                ]
+                            }
+                        ],
                         "volumes": [
                             {"name": "hermes-config", "configMap": {"name": f"{name}-config"}},
-                            {"name": "agent-data", "persistentVolumeClaim": {"claimName": f"{name}-data"}},
+                            {"name": "hermes-home", "persistentVolumeClaim": {"claimName": f"{name}-data"}},
                             {"name": "workspace-data", "persistentVolumeClaim": {"claimName": f"{name}-workspace"}}
                         ]
                     }
