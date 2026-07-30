@@ -310,7 +310,12 @@ def deploy_instance(subdomain: str) -> dict:
                                 "command": ["hermes", "dashboard", "--host", "127.0.0.1"],
                                 "ports": [{"containerPort": 9119, "name": "dashboard", "protocol": "TCP"}],
                                 "readinessProbe": {
-                                    "tcpSocket": {"port": 9119},
+                                    "exec": {
+                                        "command": [
+                                            "sh", "-c",
+                                            "python3 -c \"import socket; s=socket.socket(); s.settimeout(2); r=s.connect_ex(('127.0.0.1',9119)); s.close(); exit(0 if r==0 else 1)\""
+                                        ]
+                                    },
                                     "initialDelaySeconds": 45,
                                     "periodSeconds": 15,
                                     "failureThreshold": 3,
@@ -318,7 +323,12 @@ def deploy_instance(subdomain: str) -> dict:
                                     "timeoutSeconds": 10
                                 },
                                 "livenessProbe": {
-                                    "tcpSocket": {"port": 9119},
+                                    "exec": {
+                                        "command": [
+                                            "sh", "-c",
+                                            "python3 -c \"import socket; s=socket.socket(); s.settimeout(2); r=s.connect_ex(('127.0.0.1',9119)); s.close(); exit(0 if r==0 else 1)\""
+                                        ]
+                                    },
                                     "initialDelaySeconds": 60,
                                     "periodSeconds": 30,
                                     "failureThreshold": 3,
