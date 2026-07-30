@@ -157,6 +157,10 @@ def deploy_instance(subdomain: str) -> dict:
             })
 
         k8s_post("configmaps", {
+            "apiVersion": "v1", "kind": "ConfigMap",
+            "metadata": {"name": f"{name}-config", "namespace": NAMESPACE, "labels": {"app": "agent-instance"}},
+            "data": {"config.yaml": config}
+        })
 
         # Create webui password secret
         k8s_post("secrets", {
@@ -171,10 +175,6 @@ def deploy_instance(subdomain: str) -> dict:
             "data": {
                 "password": base64.b64encode(b"vjourne-2026").decode()
             }
-        })
-            "apiVersion": "v1", "kind": "ConfigMap",
-            "metadata": {"name": f"{name}-config", "namespace": NAMESPACE, "labels": {"app": "agent-instance"}},
-            "data": {"config.yaml": config}
         })
 
         # Build the deployment manifest as a dict (mirrors the working hermes-webui deployment)
