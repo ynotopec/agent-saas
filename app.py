@@ -264,7 +264,12 @@ def deploy_instance(subdomain: str) -> dict:
                                 "args": ["hermes gateway run --no-supervise --force"],
                                 "ports": [{"containerPort": 8642, "name": "gateway", "protocol": "TCP"}],
                                 "readinessProbe": {
-                                    "tcpSocket": {"port": 8642},
+                                    "exec": {
+                                        "command": [
+                                            "sh", "-c",
+                                            "python3 -c \"import socket; s=socket.socket(); s.settimeout(2); r=s.connect_ex(('127.0.0.1',8642)); s.close(); exit(0 if r==0 else 1)\""
+                                        ]
+                                    },
                                     "initialDelaySeconds": 30,
                                     "periodSeconds": 10,
                                     "failureThreshold": 30,
