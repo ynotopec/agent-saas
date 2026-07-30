@@ -264,12 +264,7 @@ def deploy_instance(subdomain: str) -> dict:
                                 "args": ["hermes gateway run --no-supervise --force"],
                                 "ports": [{"containerPort": 8642, "name": "gateway", "protocol": "TCP"}],
                                 "readinessProbe": {
-                                    "exec": {
-                                        "command": [
-                                            "sh", "-c",
-                                            "python3 -c 'import socket; s=socket.socket(); s.settimeout(2); r=s.connect_ex((\x27127.0.0.1\x27,8642)); s.close(); exit(0 if r==0 else 1)'"
-                                        ]
-                                    },
+                                    "tcpSocket": {"port": 8642},
                                     "initialDelaySeconds": 30,
                                     "periodSeconds": 10,
                                     "failureThreshold": 30,
@@ -310,12 +305,7 @@ def deploy_instance(subdomain: str) -> dict:
                                 "command": ["hermes", "dashboard", "--host", "127.0.0.1"],
                                 "ports": [{"containerPort": 9119, "name": "dashboard", "protocol": "TCP"}],
                                 "readinessProbe": {
-                                    "exec": {
-                                        "command": [
-                                            "sh", "-c",
-                                            "python3 -c 'import socket; s=socket.socket(); s.settimeout(2); r=s.connect_ex((\x27127.0.0.1\x27,9119)); s.close(); exit(0 if r==0 else 1)'"
-                                        ]
-                                    },
+                                    "tcpSocket": {"port": 9119},
                                     "initialDelaySeconds": 45,
                                     "periodSeconds": 15,
                                     "failureThreshold": 3,
@@ -323,12 +313,7 @@ def deploy_instance(subdomain: str) -> dict:
                                     "timeoutSeconds": 10
                                 },
                                 "livenessProbe": {
-                                    "exec": {
-                                        "command": [
-                                            "sh", "-c",
-                                            "python3 -c 'import socket; s=socket.socket(); s.settimeout(2); r=s.connect_ex((\x27127.0.0.1\x27,9119)); s.close(); exit(0 if r==0 else 1)'"
-                                        ]
-                                    },
+                                    "tcpSocket": {"port": 9119},
                                     "initialDelaySeconds": 60,
                                     "periodSeconds": 30,
                                     "failureThreshold": 3,
