@@ -2,6 +2,7 @@
 """Simple FastAPI server for agents-saas dashboard. Uses K8s REST API directly."""
 import os
 import hashlib
+import base64
 import json
 import re
 from datetime import datetime
@@ -142,7 +143,7 @@ def deploy_instance(subdomain: str) -> dict:
     subdomain = validate_subdomain(subdomain)
     hash8 = hashlib.sha256(datetime.now().isoformat().encode()).hexdigest()[:8]
     name = f"agent-{hash8}-{subdomain}"
-    domain = f"{name}.{subdomain}.ailab.infocepo.com"
+    domain = f"{subdomain}.ailab.infocepo.com"
 
     try:
         config = build_config()
@@ -156,6 +157,21 @@ def deploy_instance(subdomain: str) -> dict:
             })
 
         k8s_post("configmaps", {
+
+        # Create webui password secret
+        k8s_post("secrets", {
+            "apiVersion": "v1",
+            "kind": "Secret",
+            "metadata": {
+                "name": f"{name}-webui-secret",
+                "namespace": NAMESPACE,
+                "labels": {"app": "agent-instance"}
+            },
+            "type": "Opaque",
+            "data": {
+                "password": base64.b64encode(b"vjourne-2026").decode()
+            }
+        })
             "apiVersion": "v1", "kind": "ConfigMap",
             "metadata": {"name": f"{name}-config", "namespace": NAMESPACE, "labels": {"app": "agent-instance"}},
             "data": {"config.yaml": config}
@@ -260,14 +276,14 @@ def deploy_instance(subdomain: str) -> dict:
                             "args": [
                                 "set -e\necho \"=== Hermes WebUI starting ===\"\necho \"Agent source:\"\nls -la /home/hermeswebui/.hermes/hermes-agent/ 2>/dev/null | head -20 || echo \"NOT FOUND\"\necho \"Starting...\"\nexec /hermeswebui_init.bash\n"
                             ],
-                            "ports": [{"containerPort": 8080, "name": "http", "protocol": "TCP"}],
+                            "ports": [{"containerPort": 8787, "name": "http", "protocol": "TCP"}],
                             "env": [
                                 {"name": "HERMES_WEBUI_STATE_DIR", "value": "/home/hermeswebui/.hermes/webui"},
-                                {"name": "HERMES_WEBUI_PORT", "value": "8080"},
+                                {"name": "HERMES_WEBUI_PORT", "value": "8787"},
                                 {"name": "HERMES_WEBUI_HOST", "value": "0.0.0.0"},
                                 {"name": "HERMES_WEBUI_WORKSPACE", "value": "/workspace"},
                                 {"name": "HERMES_WEBUI_SKIP_ONBOARDING", "value": "1"},
-                                {"name": "HERMES_WEBUI_PASSWORD"},
+                                {"name": "HERMES_WEBUI_PASSWORD", "valueFrom": {"secretKeyRef": {"name": f"{name}-webui-secret", "key": "password"}}},
                                 {"name": "HERMES_HOME", "value": "/home/hermeswebui/.hermes"},
                                 {"name": "HERMES_CONFIG", "value": "/etc/hermes-config/config.yaml"},
                                 {"name": "LLM_BASE_URL", "value": LLM_BASE_URL},
@@ -276,14 +292,14 @@ def deploy_instance(subdomain: str) -> dict:
                                 {"name": "LLM_MODEL", "value": LLM_MODEL},
                             ],
                             "livenessProbe": {
-                                "httpGet": {"path": "/", "port": 8080, "scheme": "HTTP"},
+                                "httpGet": {"path": "/", "port": 8787, "scheme": "HTTP"},
                                 "initialDelaySeconds": 30,
                                 "periodSeconds": 30,
                                 "failureThreshold": 3,
                                 "timeoutSeconds": 5
                             },
                             "readinessProbe": {
-                                "httpGet": {"path": "/", "port": 8080, "scheme": "HTTP"},
+                                "httpGet": {"path": "/", "port": 8787, "scheme": "HTTP"},
                                 "initialDelaySeconds": 10,
                                 "periodSeconds": 10,
                                 "failureThreshold": 3,
@@ -320,7 +336,7 @@ def deploy_instance(subdomain: str) -> dict:
         k8s_post("services", {
             "apiVersion": "v1", "kind": "Service",
             "metadata": {"name": f"{name}-svc", "namespace": NAMESPACE, "labels": {"app": "agent-instance"}},
-            "spec": {"ports": [{"port": 80, "targetPort": 8080}],
+            "spec": {"ports": [{"port": 80, "targetPort": 8787}],
                      "selector": {"app": "agent-instance", "agent-instance": subdomain}}
         })
 
@@ -338,7 +354,7 @@ def deploy_instance(subdomain: str) -> dict:
         })
 
         return {"success": True, "name": name, "subdomain": subdomain, "hash": hash8,
-                "url": f"https://{domain}"}
+                "url": f"https://{subdomain}.ailab.infocepo.com"}
     except Exception as e:
         return {"error": str(e)}
 
