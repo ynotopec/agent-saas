@@ -106,7 +106,7 @@ def list_instances():
             instances.append({
                 "name": name,
                 "subdomain": subdomain,
-                "url": f"https://{name}.{subdomain}.ailab.infocepo.com",
+                "url": f"https://{subdomain}.ailab.infocepo.com",
                 "status": pod.get("status", {}).get("phase", "Unknown")
             })
     return instances
