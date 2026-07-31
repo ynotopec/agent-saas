@@ -1,0 +1,74 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agents-saas
+  namespace: demo1
+  labels:
+    app: agents-saas
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: agents-saas
+  template:
+    metadata:
+      labels:
+        app: agents-saas
+    spec:
+      serviceAccountName: agents-saas-sa
+      containers:
+      - name: agents-saas
+        image: python:3.12-slim
+        command: ["python3", "/app/app.py"]
+        ports:
+        - containerPort: 8000
+        env:
+        - name: LLM_BASE_URL
+          value: "https://api-nothink.ailab.infocepo.com/v1"
+        - name: LLM_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: agents-saas-secrets
+              key: LLM_API_KEY
+        - name: LLM_PROVIDER
+          value: "infocepo-alias"
+        - name: LLM_MODEL
+          value: "ai-thinking"
+        - name: API_SERVER_KEY
+          value: "ce1dfb04ec3c143320c9ed3d348e32d85d5144898547875d86ad382ae184b88e"
+        - name: DEPLOY_TOKEN
+          value: "test-token-123"
+        resources:
+          limits:
+            cpu: "500m"
+            memory: "1Gi"
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 3
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 30
+        volumeMounts:
+        - name: app-files
+          mountPath: /app
+        - name: pip-packages
+          mountPath: /usr/local/lib/python3.12/site-packages
+      initContainers:
+      - name: install-pip-packages
+        image: python:3.12-slim
+        command: ["pip3", "install", "fastapi", "uvicorn", "pydantic", "argon2-cffi", "--target", "/packages"]
+        volumeMounts:
+        - name: pip-packages
+          mountPath: /packages
+      volumes:
+      - name: app-files
+        configMap:
+          name: agents-saas-app
+      - name: pip-packages
+        emptyDir: {}

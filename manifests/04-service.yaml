@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: agents-saas-svc
+  namespace: demo1
+  labels:
+    app: agents-saas
+spec:
+  selector:
+    app: agents-saas
+  ports:
+  - port: 80
+    targetPort: 8000
+    protocol: TCP
+  type: ClusterIP

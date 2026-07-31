@@ -1,0 +1,30 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: agents-saas-ingress
+  namespace: demo1
+  labels:
+    app: agents-saas
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-cache-bypass: no-cache
+    nginx.ingress.kubernetes.io/no-cache: "true"
+    nginx.ingress.kubernetes.io/proxy-no-cache: "true"
+spec:
+  ingressClassName: public
+  tls:
+  - hosts:
+    - agents-saas.ailab.infocepo.com
+    secretName: agents-saas-tls
+  rules:
+  - host: agents-saas.ailab.infocepo.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: agents-saas-svc
+            port:
+              number: 80
