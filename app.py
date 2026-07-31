@@ -98,6 +98,25 @@ def k8s_post(resource_type, body):
     except Exception as e:
         raise RuntimeError(f"Failed to create {resource_type}: {e}") from e
 
+
+def k8s_patch(resource_type, name, body):
+    """Patch an existing K8s resource."""
+    import urllib.request
+    try:
+        token = get_token()
+        if not token:
+            raise RuntimeError("Kubernetes service account token is unavailable")
+        data = json.dumps(body).encode()
+        base = _api_base(resource_type)
+        url = f"{base}/namespaces/{NAMESPACE}/{resource_type}/{name}"
+        req = urllib.request.Request(url, data=data,
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            method="PATCH")
+        with urllib.request.urlopen(req, cafile=CA_PATH) as resp:
+            return json.loads(resp.read())
+    except Exception as e:
+        raise RuntimeError(f"Failed to patch {resource_type}/{name}: {e}") from e
+
 def list_instances():
     res = k8s_get("pods", label_selector="app=agent-instance")
     instances = []
@@ -471,7 +490,31 @@ def change_password(subdomain: str, new_password: str) -> dict:
         raise HTTPException(status_code=404, detail=f"No instance found with subdomain {subdomain}")
 
     pod_name = pods["items"][0]["metadata"]["name"]
-    pvc_name = f"{pod_name}-data"
+
+    # Find PVC: pod name is "agent-{hash8}-{subdomain}-{dep_hash}-{random}"
+    # PVC name is "agent-{hash8}-{subdomain}-data"
+    # Extract the base name (everything up to and including the subdomain)
+    # We know hash8 is 8 hex chars right after "agent-", so we split and rebuild
+    parts = pod_name.split('-')
+    # parts[0]='agent', parts[1]=hash8, parts[2:] = subdomain parts
+    # We need to find where subdomain ends and deployment suffix begins
+    # Deployment suffix is 8 hex chars + another 4-5 random chars
+    # Subdomain can contain hyphens, so we reconstruct by finding the deployment suffix pattern
+    base_name = pod_name
+    for i in range(len(parts) - 1, 0, -1):
+        # Check if remaining parts form a deployment suffix (8 hex + random)
+        suffix = parts[i]
+        if re.fullmatch(r'[0-9a-f]{4,8}', suffix) and i > 2:
+            base_name = '-'.join(parts[:i])
+            break
+        # Also try: parts[i] + '-' + parts[i+1] as a combined suffix
+        if i < len(parts) - 1:
+            combined = parts[i] + '-' + parts[i+1]
+            if re.fullmatch(r'[0-9a-f]{8,12}', combined):
+                base_name = '-'.join(parts[:i])
+                break
+
+    pvc_name = f"{base_name}-data"
     deployment_name = pod_name
 
     # Generate hash (same algorithm as the seed initContainer)
@@ -481,30 +524,26 @@ def change_password(subdomain: str, new_password: str) -> dict:
 
     job_name = f"password-update-{subdomain}"
 
-    # Create a Job to write the new settings.json into the PVC
-    job_body = {
-        "apiVersion": "batch/v1",
-        "kind": "Job",
+    # Create a ephemeral Pod to write the new settings.json into the PVC
+    pod_body = {
+        "apiVersion": "v1",
+        "kind": "Pod",
         "metadata": {"name": job_name, "namespace": NAMESPACE, "labels": {"app": "agent-instance", "job-type": "password-update"}},
         "spec": {
-            "template": {
-                "spec": {
-                    "containers": [{
-                        "name": "update-password",
-                        "image": "python:3.12-alpine",
-                        "command": ["python3", "-c",
-                            f"import pathlib,json;s=pathlib.Path('/data/.hermes/webui/s'+'ettings.json');s.parent.mkdir(parents=True,exist_ok=True);s.write_text(json.dumps({{'password_hash':'{password_hash}','password_salt':'{salt}'}}))"
-                        ],
-                        "volumeMounts": [{"name": "data-vol", "mountPath": "/data"}]
-                    }],
-                    "restartPolicy": "OnFailure",
-                    "volumes": [{"name": "data-vol", "persistentVolumeClaim": {"claimName": pvc_name}}]
-                }
-            }
+            "containers": [{
+                "name": "update-password",
+                "image": "python:3.12-alpine",
+                "command": ["python3", "-c",
+                    f"import pathlib,json;s=pathlib.Path('/data/.hermes/webui/s'+'ettings.json');s.parent.mkdir(parents=True,exist_ok=True);s.write_text(json.dumps({{'password_hash':'{password_hash}','password_salt':'{salt}'}}))"
+                ],
+                "volumeMounts": [{"name": "data-vol", "mountPath": "/data"}]
+            }],
+            "restartPolicy": "Never",
+            "volumes": [{"name": "data-vol", "persistentVolumeClaim": {"claimName": pvc_name}}]
         }
     }
 
-    k8s_post("jobs", job_body)
+    k8s_post("pods", pod_body)
 
     # Trigger deployment rollout by adding a timestamp annotation (forces pod recreation)
     try:
@@ -517,7 +556,7 @@ def change_password(subdomain: str, new_password: str) -> dict:
                 }
             }
         }
-        k8s_post("deployments", rollout_body)
+        k8s_patch("deployments", deployment_name, rollout_body)
     except Exception:
         pass  # rollout may fail but job is created
 
