@@ -109,8 +109,10 @@ def k8s_patch(resource_type, name, body):
         data = json.dumps(body).encode()
         base = _api_base(resource_type)
         url = f"{base}/namespaces/{NAMESPACE}/{resource_type}/{name}"
+        # Use merge-patch for deployments (strategic merge doesn't work via REST API for simple patches)
+        content_type = "application/merge-patch+json"
         req = urllib.request.Request(url, data=data,
-            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            headers={"Authorization": f"Bearer {token}", "Content-Type": content_type},
             method="PATCH")
         with urllib.request.urlopen(req, cafile=CA_PATH) as resp:
             return json.loads(resp.read())
@@ -497,7 +499,7 @@ def change_password(subdomain: str, new_password: str) -> dict:
     parts = pod_name.split('-')
     base_name = '-'.join(parts[:-2])
     pvc_name = f"{base_name}-data"
-    deployment_name = pod_name
+    deployment_name = base_name  # e.g. agent-9ae62006-vjourne-agent
 
     # Generate hash (same algorithm as the seed initContainer)
     salt = os.urandom(16).hex()
