@@ -504,7 +504,7 @@ def change_password(subdomain: str, new_password: str) -> dict:
     salt_bytes = bytes.fromhex(salt)
     password_hash = hashlib.pbkdf2_hmac("sha256", new_password.encode(), salt_bytes, 60000).hex()
 
-    job_name = f"password-update-{subdomain}"
+    job_name = f"password-update-{subdomain}-{int(datetime.now().timestamp())}"
 
     # Create a ephemeral Pod to write the new settings.json into the PVC
     pod_body = {
