@@ -2,7 +2,6 @@
 """Simple FastAPI server for agents-saas dashboard. Uses K8s REST API directly."""
 import os
 import hashlib
-import base64
 import json
 import re
 import secrets
@@ -57,7 +56,7 @@ def get_token():
     try:
         with open(SA_TOKEN_PATH) as f:
             return f.read().strip()
-    except:
+    except OSError:
         return None
 
 def _api_base(resource_type):
@@ -68,7 +67,7 @@ def _api_base(resource_type):
     }
     version = api_map.get(resource_type, "v1")
     if version == "v1":
-        return f"https://kubernetes.default.svc/api/v1"
+        return "https://kubernetes.default.svc/api/v1"
     parts = version.split("/")
     group = parts[0]
     ver = parts[1]

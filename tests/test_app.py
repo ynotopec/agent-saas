@@ -5,12 +5,12 @@ Run: python3 -m pytest tests/test_app.py -v
 import pytest
 import sys
 import os
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 import app as app_module
-from app import app, validate_subdomain, build_config, list_instances, deploy_instance, change_password
+from app import app, build_config, validate_subdomain
 
 AUTH_HEADERS = {"X-Deploy-Token": "test-deploy-token"}
 
