@@ -35,9 +35,20 @@ spec:
         - name: LLM_MODEL
           value: "ai-thinking"
         - name: API_SERVER_KEY
-          value: "ce1dfb04ec3c143320c9ed3d348e32d85d5144898547875d86ad382ae184b88e"
+          valueFrom:
+            secretKeyRef:
+              name: agents-saas-secrets
+              key: API_SERVER_KEY
         - name: DEPLOY_TOKEN
-          value: "test-token-123"
+          valueFrom:
+            secretKeyRef:
+              name: agents-saas-secrets
+              key: DEPLOY_TOKEN
+        - name: HERMES_WEBUI_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: agents-saas-secrets
+              key: HERMES_WEBUI_PASSWORD
         resources:
           limits:
             cpu: "500m"

@@ -1,6 +1,6 @@
 #!/bin/bash
 # deploy-agent.sh - Create a new agent instance with all K8s resources
-set -e
+set -eu
 
 SUBDOMAIN="${1:?Usage: deploy-agent.sh <subdomain>}"
 NAMESPACE="${2:-demo1}"
@@ -8,6 +8,14 @@ KUBECONFIG="${3:-/etc/kubernetes/admin.conf}"
 DOMAIN_SUFFIX=".ailab.infocepo.com"
 CLUSTER_ISSUER="letsencrypt-prod"
 INGRESS_CLASS="public"
+
+if ! [[ "$SUBDOMAIN" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] || [[ "$SUBDOMAIN" == *--* ]]; then
+  echo "Invalid subdomain: use 1-63 lowercase letters, digits, or single hyphens" >&2
+  exit 2
+fi
+: "${LLM_API_KEY:?Set LLM_API_KEY in the environment}"
+: "${API_SERVER_KEY:?Set API_SERVER_KEY in the environment}"
+: "${HERMES_WEBUI_PASSWORD:?Set HERMES_WEBUI_PASSWORD in the environment}"
 
 # Generate unique prefix
 HASH=$(date +%s%N | sha256sum | cut -c1-8)
@@ -17,6 +25,11 @@ DOMAIN="${SUBDOMAIN}.ailab.infocepo.com"
 
 echo "=== Deploying ${NAME} ==="
 echo "Domain: ${DOMAIN}"
+
+# Create the per-instance WebUI secret without writing credentials to the repository.
+kubectl --kubeconfig="${KUBECONFIG}" -n "${NAMESPACE}" create secret generic "${NAME}-webui-secret" \
+  --from-literal=password="${HERMES_WEBUI_PASSWORD}" \
+  --dry-run=client -o yaml | kubectl --kubeconfig="${KUBECONFIG}" apply -f -
 
 # Create PVCs
 cat <<EOF | kubectl --kubeconfig="${KUBECONFIG}" apply -f -
@@ -176,7 +189,7 @@ spec:
         - name: HERMES_CONFIG
           value: /etc/hermes-config/config.yaml
         - name: API_SERVER_KEY
-          value: ce1dfb04ec3c143320c9ed3d348e32d85d5144898547875d86ad382ae184b88e
+          value: "${API_SERVER_KEY}"
         readinessProbe:
           exec:
             command: ["sh", "-c", "python3 -c 'import socket; s=socket.socket(); s.settimeout(2); r=s.connect_ex((\"127.0.0.1\",8642)); s.close(); exit(0 if r==0 else 1)'"]
@@ -322,7 +335,8 @@ spec:
           claimName: ${NAME}-data
       - name: workspace-data
         persistentVolumeClaim:
-          claimName: ${NAME}-workspaceEOF
+          claimName: ${NAME}-workspace
+EOF
 
 # Create Service
 cat <<EOF | kubectl --kubeconfig="${KUBECONFIG}" apply -f -

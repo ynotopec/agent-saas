@@ -9,12 +9,18 @@ from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
+import app as app_module
 from app import app, validate_subdomain, build_config, list_instances, deploy_instance, change_password
+
+AUTH_HEADERS = {"X-Deploy-Token": "test-deploy-token"}
 
 
 @pytest.fixture
-def client():
+def client(monkeypatch):
     """Test client with test config."""
+    monkeypatch.setattr(app_module, "DEPLOY_TOKEN", "test-deploy-token")
+    monkeypatch.setattr(app_module, "HERMES_WEBUI_PASSWORD", "test-webui-password")
+    monkeypatch.setattr(app_module, "API_SERVER_KEY", "test-api-server-key")
     from fastapi.testclient import TestClient
     with TestClient(app) as client:
         yield client
@@ -65,7 +71,7 @@ class TestInstancesEndpoint:
 
     def test_instances_returns_list(self, client):
         """GET /api/instances should return a list (may be empty without K8s)."""
-        response = client.get("/api/instances")
+        response = client.get("/api/instances", headers=AUTH_HEADERS)
         assert response.status_code == 200
         data = response.json()
         assert isinstance(data, list)
@@ -74,10 +80,15 @@ class TestInstancesEndpoint:
 class TestDeployEndpoint:
     """Tests for /api/deploy endpoint."""
 
+    def test_deploy_requires_authentication(self, client):
+        """POST /api/deploy should reject requests without the shared token."""
+        response = client.post("/api/deploy", json={"subdomain": "test"})
+        assert response.status_code == 401
+
     @patch('app.k8s_post')
     def test_deploy_returns_success(self, mock_k8s_post, client):
         """POST /api/deploy should return success response when K8s calls succeed."""
-        response = client.post("/api/deploy", json={"subdomain": "test"})
+        response = client.post("/api/deploy", headers=AUTH_HEADERS, json={"subdomain": "test"})
         assert response.status_code == 200
         data = response.json()
         assert data["success"] is True
@@ -89,7 +100,7 @@ class TestDeployEndpoint:
     @patch('app.k8s_post')
     def test_deploy_returns_correct_name(self, mock_k8s_post, client):
         """Deploy should return name with format agent-<hash>-<subdomain>."""
-        response = client.post("/api/deploy", json={"subdomain": "myapp"})
+        response = client.post("/api/deploy", headers=AUTH_HEADERS, json={"subdomain": "myapp"})
         assert response.status_code == 200
         data = response.json()
         assert data["name"].startswith("agent-")
@@ -97,7 +108,7 @@ class TestDeployEndpoint:
 
     def test_deploy_invalid_subdomain(self, client):
         """POST /api/deploy with invalid subdomain should return 400."""
-        response = client.post("/api/deploy", json={"subdomain": "INVALID"})
+        response = client.post("/api/deploy", headers=AUTH_HEADERS, json={"subdomain": "INVALID"})
         assert response.status_code == 400
 
 
@@ -139,6 +150,7 @@ class TestChangePasswordEndpoint:
         }
         response = client.post(
             "/api/change-password",
+            headers=AUTH_HEADERS,
             json={"subdomain": "test", "new_password": "newsecret123"},
         )
         assert response.status_code == 200
@@ -151,6 +163,7 @@ class TestChangePasswordEndpoint:
         """POST /api/change-password with empty password should return 400."""
         response = client.post(
             "/api/change-password",
+            headers=AUTH_HEADERS,
             json={"subdomain": "test", "new_password": ""},
         )
         assert response.status_code == 400
@@ -160,6 +173,7 @@ class TestChangePasswordEndpoint:
         """POST /api/change-password with password shorter than 4 chars should return 400."""
         response = client.post(
             "/api/change-password",
+            headers=AUTH_HEADERS,
             json={"subdomain": "test", "new_password": "abc"},
         )
         assert response.status_code == 400
@@ -169,6 +183,7 @@ class TestChangePasswordEndpoint:
         """POST /api/change-password with invalid subdomain should return 400."""
         response = client.post(
             "/api/change-password",
+            headers=AUTH_HEADERS,
             json={"subdomain": "INVALID", "new_password": "newsecret"},
         )
         assert response.status_code == 400

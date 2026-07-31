@@ -5,8 +5,9 @@ import hashlib
 import base64
 import json
 import re
+import secrets
 from datetime import datetime
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
@@ -27,7 +28,18 @@ LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "https://api-nothink.ailab.infocep
 LLM_API_KEY = os.environ.get("LLM_API_KEY", "")
 LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "infocepo-alias")
 LLM_MODEL = os.environ.get("LLM_MODEL", "ai-thinking")
+DEPLOY_TOKEN = os.environ.get("DEPLOY_TOKEN", "")
+HERMES_WEBUI_PASSWORD = os.environ.get("HERMES_WEBUI_PASSWORD", "")
+API_SERVER_KEY = os.environ.get("API_SERVER_KEY", "")
 SUBDOMAIN_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+
+def require_deploy_token(x_deploy_token: str | None = Header(default=None)) -> None:
+    """Require a shared token for state-changing dashboard operations."""
+    if not DEPLOY_TOKEN:
+        raise HTTPException(status_code=503, detail="Deployment API is not configured")
+    if not x_deploy_token or not secrets.compare_digest(x_deploy_token, DEPLOY_TOKEN):
+        raise HTTPException(status_code=401, detail="Invalid deployment token")
+
 
 def validate_subdomain(subdomain: str) -> str:
     """Return a Kubernetes/DNS-safe subdomain or raise ValueError."""
@@ -175,6 +187,10 @@ def deploy_instance(subdomain: str) -> dict:
     domain = f"{subdomain}.ailab.infocepo.com"
 
     try:
+        if not HERMES_WEBUI_PASSWORD:
+            raise RuntimeError("HERMES_WEBUI_PASSWORD is not configured")
+        if not API_SERVER_KEY:
+            raise RuntimeError("API_SERVER_KEY is not configured")
         config = build_config()
 
         for pvc in [f"{name}-data", f"{name}-workspace"]:
@@ -275,10 +291,11 @@ def deploy_instance(subdomain: str) -> dict:
                                 "image": "python:3.12-alpine",
                                 "command": ["sh", "-c"],
                                 "args": [
-                                    "python3 -c '\nimport hashlib, os, json, pathlib\npathlib.Path(\"/hermes-home/.hermes/webui\").mkdir(parents=True, exist_ok=True)\nif not pathlib.Path(\"/hermes-home/.hermes/webui/settings.json\").exists():\n    password = b\"vjourne-2026\"\n    salt = os.urandom(16)\n    hash_val = hashlib.pbkdf2_hmac(\"sha256\", password, salt, 60000)\n    settings = {\n        \"password_hash\": hash_val.hex(),\n        \"password_salt\": salt.hex()\n    }\n    pathlib.Path(\"/hermes-home/.hermes/webui/settings.json\").write_text(json.dumps(settings))\n    print(\"Password seeded for fresh instance\")\nelse:\n    print(\"settings.json already exists, skipping password seed\")\n'\n",
+                                    "python3 -c '\nimport hashlib, os, json, pathlib\npathlib.Path(\"/hermes-home/.hermes/webui\").mkdir(parents=True, exist_ok=True)\nif not pathlib.Path(\"/hermes-home/.hermes/webui/settings.json\").exists():\n    password = os.environ[\"HERMES_WEBUI_PASSWORD\"].encode()\n    salt = os.urandom(16)\n    hash_val = hashlib.pbkdf2_hmac(\"sha256\", password, salt, 60000)\n    settings = {\n        \"password_hash\": hash_val.hex(),\n        \"password_salt\": salt.hex()\n    }\n    pathlib.Path(\"/hermes-home/.hermes/webui/settings.json\").write_text(json.dumps(settings))\n    print(\"Password seeded for fresh instance\")\nelse:\n    print(\"settings.json already exists, skipping password seed\")\n'\n",
                                 ],
                                 "resources": {"limits": {"cpu": "100m", "memory": "128Mi"}},
                                 "securityContext": {"runAsUser": 0},
+                                "env": [{"name": "HERMES_WEBUI_PASSWORD", "value": HERMES_WEBUI_PASSWORD}],
                                 "volumeMounts": [
                                     {"mountPath": "/hermes-home", "name": "hermes-home"}
                                 ]
@@ -329,7 +346,7 @@ def deploy_instance(subdomain: str) -> dict:
                                     {"name": "HERMES_GATEWAY_NO_SUPERVISE", "value": "1"},
                                     {"name": "MCP_DISABLE", "value": "1"},
                                     {"name": "HERMES_CONFIG", "value": "/etc/hermes-config/config.yaml"},
-                                    {"name": "API_SERVER_KEY", "value": "ce1dfb04ec3c143320c9ed3d348e32d85d5144898547875d86ad382ae184b88e"}
+                                    {"name": "API_SERVER_KEY", "value": API_SERVER_KEY}
                                 ]
                             },
                             {
@@ -468,14 +485,17 @@ def deploy_instance(subdomain: str) -> dict:
 def index():
     return HTMLResponse(CONTENT)
 
-@app.get("/api/instances")
+@app.get("/api/instances", dependencies=[Depends(require_deploy_token)])
 def api_instances():
     return JSONResponse(list_instances())
 
-@app.post("/api/deploy")
+@app.post("/api/deploy", dependencies=[Depends(require_deploy_token)])
 def api_deploy(req: DeployRequest):
     try:
-        return JSONResponse(deploy_instance(req.subdomain))
+        result = deploy_instance(req.subdomain)
+        if "error" in result:
+            raise HTTPException(status_code=502, detail=result["error"])
+        return JSONResponse(result)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
@@ -547,7 +567,7 @@ def change_password(subdomain: str, new_password: str) -> dict:
     return {"success": True, "subdomain": subdomain}
 
 
-@app.post("/api/change-password")
+@app.post("/api/change-password", dependencies=[Depends(require_deploy_token)])
 def api_change_password(req: ChangePasswordRequest):
     try:
         return JSONResponse(change_password(req.subdomain, req.new_password))
@@ -595,6 +615,10 @@ CONTENT = """<!DOCTYPE html>
             <h2>Déployer une nouvelle instance</h2>
             <form id="deploy-form">
                 <div class="form-group">
+                    <label for="deploy-token">Jeton de déploiement :</label>
+                    <input type="password" id="deploy-token" name="deploy-token" autocomplete="current-password" required>
+                </div>
+                <div class="form-group">
                     <label for="subdomain">Sous-domaine :</label>
                     <input type="text" id="subdomain" name="subdomain" placeholder="ex: mon-projet" required>
                 </div>
@@ -611,6 +635,7 @@ CONTENT = """<!DOCTYPE html>
         async function deploy(e) {
             e.preventDefault();
             const subdomain = document.getElementById('subdomain').value;
+            const deployToken = document.getElementById('deploy-token').value;
             const btn = document.getElementById('deploy-btn');
             const result = document.getElementById('result');
             btn.disabled = true;
@@ -618,7 +643,7 @@ CONTENT = """<!DOCTYPE html>
             try {
                 const resp = await fetch('/api/deploy', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 'Content-Type': 'application/json', 'X-Deploy-Token': deployToken },
                     body: JSON.stringify({ subdomain })
                 });
                 const data = await resp.json();
@@ -639,7 +664,10 @@ CONTENT = """<!DOCTYPE html>
         async function loadInstances() {
             const list = document.getElementById('instances-list');
             try {
-                const resp = await fetch('/api/instances');
+                const deployToken = document.getElementById('deploy-token').value;
+                if (!deployToken) { list.innerHTML = '<p>Saisissez le jeton pour afficher les instances.</p>'; return; }
+                const resp = await fetch('/api/instances', { headers: { 'X-Deploy-Token': deployToken } });
+                if (!resp.ok) throw new Error('Authentification refusée');
                 const instances = await resp.json();
                 if (instances.length === 0) {
                     list.innerHTML = '<p>Aucune instance.</p>';
@@ -653,6 +681,7 @@ CONTENT = """<!DOCTYPE html>
             }
         }
         document.getElementById('deploy-form').addEventListener('submit', deploy);
+        document.getElementById('deploy-token').addEventListener('change', loadInstances);
         loadInstances();
     </script>
 </body>
