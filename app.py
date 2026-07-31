@@ -491,29 +491,11 @@ def change_password(subdomain: str, new_password: str) -> dict:
 
     pod_name = pods["items"][0]["metadata"]["name"]
 
-    # Find PVC: pod name is "agent-{hash8}-{subdomain}-{dep_hash}-{random}"
-    # PVC name is "agent-{hash8}-{subdomain}-data"
-    # Extract the base name (everything up to and including the subdomain)
-    # We know hash8 is 8 hex chars right after "agent-", so we split and rebuild
+    # Pod name format: agent-{hash8}-{subdomain}-{dep_hash}-{random}
+    # The suffix (deployment revision) is always the last 2 parts separated by hyphens.
+    # PVC name: {base_name}-data where base_name = pod_name minus last 2 parts.
     parts = pod_name.split('-')
-    # parts[0]='agent', parts[1]=hash8, parts[2:] = subdomain parts
-    # We need to find where subdomain ends and deployment suffix begins
-    # Deployment suffix is 8 hex chars + another 4-5 random chars
-    # Subdomain can contain hyphens, so we reconstruct by finding the deployment suffix pattern
-    base_name = pod_name
-    for i in range(len(parts) - 1, 0, -1):
-        # Check if remaining parts form a deployment suffix (8 hex + random)
-        suffix = parts[i]
-        if re.fullmatch(r'[0-9a-f]{4,8}', suffix) and i > 2:
-            base_name = '-'.join(parts[:i])
-            break
-        # Also try: parts[i] + '-' + parts[i+1] as a combined suffix
-        if i < len(parts) - 1:
-            combined = parts[i] + '-' + parts[i+1]
-            if re.fullmatch(r'[0-9a-f]{8,12}', combined):
-                base_name = '-'.join(parts[:i])
-                break
-
+    base_name = '-'.join(parts[:-2])
     pvc_name = f"{base_name}-data"
     deployment_name = pod_name
 
