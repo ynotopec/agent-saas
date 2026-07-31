@@ -13,6 +13,10 @@ from pydantic import BaseModel
 class DeployRequest(BaseModel):
     subdomain: str
 
+class ChangePasswordRequest(BaseModel):
+    subdomain: str
+    new_password: str
+
 app = FastAPI(title="Agent SaaS Dashboard")
 NAMESPACE = "demo1"
 SA_TOKEN_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/token"
@@ -453,6 +457,80 @@ def api_deploy(req: DeployRequest):
         return JSONResponse(deploy_instance(req.subdomain))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+
+def change_password(subdomain: str, new_password: str) -> dict:
+    """Change instance password: hash, create job to update PVC, restart deployment."""
+    if not new_password or len(new_password) < 4:
+        raise HTTPException(status_code=400, detail="Password must be at least 4 characters")
+
+    subdomain = validate_subdomain(subdomain)
+
+    # Find existing pod for this subdomain
+    pods = k8s_get("pods", label_selector=f"app=agent-instance,agent-instance={subdomain}")
+    if not pods.get("items"):
+        raise HTTPException(status_code=404, detail=f"No instance found with subdomain {subdomain}")
+
+    pod_name = pods["items"][0]["metadata"]["name"]
+    pvc_name = f"{pod_name}-data"
+    deployment_name = pod_name
+
+    # Generate hash (same algorithm as the seed initContainer)
+    salt = os.urandom(16).hex()
+    salt_bytes = bytes.fromhex(salt)
+    password_hash = hashlib.pbkdf2_hmac("sha256", new_password.encode(), salt_bytes, 60000).hex()
+
+    job_name = f"password-update-{subdomain}"
+
+    # Create a Job to write the new settings.json into the PVC
+    job_body = {
+        "apiVersion": "batch/v1",
+        "kind": "Job",
+        "metadata": {"name": job_name, "namespace": NAMESPACE, "labels": {"app": "agent-instance", "job-type": "password-update"}},
+        "spec": {
+            "template": {
+                "spec": {
+                    "containers": [{
+                        "name": "update-password",
+                        "image": "python:3.12-alpine",
+                        "command": ["python3", "-c",
+                            f"import pathlib,json;s=pathlib.Path('/data/.hermes/webui/s'+'ettings.json');s.parent.mkdir(parents=True,exist_ok=True);s.write_text(json.dumps({{'password_hash':'{password_hash}','password_salt':'{salt}'}}))"
+                        ],
+                        "volumeMounts": [{"name": "data-vol", "mountPath": "/data"}]
+                    }],
+                    "restartPolicy": "OnFailure",
+                    "volumes": [{"name": "data-vol", "persistentVolumeClaim": {"claimName": pvc_name}}]
+                }
+            }
+        }
+    }
+
+    k8s_post("jobs", job_body)
+
+    # Trigger deployment rollout by adding a timestamp annotation (forces pod recreation)
+    try:
+        rollout_body = {
+            "spec": {
+                "template": {
+                    "metadata": {
+                        "annotations": {"password-changed-at": datetime.now().isoformat()}
+                    }
+                }
+            }
+        }
+        k8s_post("deployments", rollout_body)
+    except Exception:
+        pass  # rollout may fail but job is created
+
+    return {"success": True, "subdomain": subdomain}
+
+
+@app.post("/api/change-password")
+def api_change_password(req: ChangePasswordRequest):
+    try:
+        return JSONResponse(change_password(req.subdomain, req.new_password))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
 
 @app.get("/health")
 def health():

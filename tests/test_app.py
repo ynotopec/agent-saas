@@ -9,7 +9,7 @@ from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from app import app, validate_subdomain, build_config, list_instances, deploy_instance
+from app import app, validate_subdomain, build_config, list_instances, deploy_instance, change_password
 
 
 @pytest.fixture
@@ -125,6 +125,53 @@ class TestConfigGeneration:
         assert "providers:" in config
         assert "custom_providers:" in config
         assert "toolsets:" in config
+
+
+class TestChangePasswordEndpoint:
+    """Tests for the POST /api/change-password endpoint."""
+
+    @patch("app.k8s_get")
+    @patch("app.k8s_post")
+    def test_change_password_creates_job(self, mock_k8s_post, mock_k8s_get, client):
+        """POST /api/change-password should return success when called with valid data."""
+        mock_k8s_get.return_value = {
+            "items": [{"metadata": {"name": "agent-abc-test", "labels": {"app": "agent-instance"}}}]
+        }
+        response = client.post(
+            "/api/change-password",
+            json={"subdomain": "test", "new_password": "newsecret123"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        assert data["subdomain"] == "test"
+
+    @patch("app.k8s_post")
+    def test_change_password_rejects_empty_password(self, mock_k8s_post, client):
+        """POST /api/change-password with empty password should return 400."""
+        response = client.post(
+            "/api/change-password",
+            json={"subdomain": "test", "new_password": ""},
+        )
+        assert response.status_code == 400
+
+    @patch("app.k8s_post")
+    def test_change_password_rejects_short_password(self, mock_k8s_post, client):
+        """POST /api/change-password with password shorter than 4 chars should return 400."""
+        response = client.post(
+            "/api/change-password",
+            json={"subdomain": "test", "new_password": "abc"},
+        )
+        assert response.status_code == 400
+
+    @patch("app.k8s_post")
+    def test_change_password_rejects_invalid_subdomain(self, mock_k8s_post, client):
+        """POST /api/change-password with invalid subdomain should return 400."""
+        response = client.post(
+            "/api/change-password",
+            json={"subdomain": "INVALID", "new_password": "newsecret"},
+        )
+        assert response.status_code == 400
 
 
 if __name__ == "__main__":
