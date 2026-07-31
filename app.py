@@ -166,20 +166,7 @@ def deploy_instance(subdomain: str) -> dict:
             "data": {"config.yaml": config}
         })
 
-        # Create webui password secret
-        k8s_post("secrets", {
-            "apiVersion": "v1",
-            "kind": "Secret",
-            "metadata": {
-                "name": f"{name}-webui-secret",
-                "namespace": NAMESPACE,
-                "labels": {"app": "agent-instance"}
-            },
-            "type": "Opaque",
-            "data": {
-                "password": base64.b64encode(b"vjourne-2026").decode()
-            }
-        })
+
 
         # Build the deployment manifest as a dict (mirrors the working hermes-webui deployment)
         deployment_body = {
@@ -253,6 +240,19 @@ def deploy_instance(subdomain: str) -> dict:
                                     "echo '=== Init done ==='"
                                 ],
                                 "resources": {"limits": {"cpu": "200m", "memory": "1Gi"}},
+                                "securityContext": {"runAsUser": 0},
+                                "volumeMounts": [
+                                    {"mountPath": "/hermes-home", "name": "hermes-home"}
+                                ]
+                            },
+                            {
+                                "name": "password-seed",
+                                "image": "python:3.12-alpine",
+                                "command": ["sh", "-c"],
+                                "args": [
+                                    "python3 -c '\nimport hashlib, os, json, pathlib\npathlib.Path(\"/hermes-home/.hermes/webui\").mkdir(parents=True, exist_ok=True)\nif not pathlib.Path(\"/hermes-home/.hermes/webui/settings.json\").exists():\n    password = b\"vjourne-2026\"\n    salt = os.urandom(16)\n    hash_val = hashlib.pbkdf2_hmac(\"sha256\", password, salt, 60000)\n    settings = {\n        \"password_hash\": hash_val.hex(),\n        \"password_salt\": salt.hex()\n    }\n    pathlib.Path(\"/hermes-home/.hermes/webui/settings.json\").write_text(json.dumps(settings))\n    print(\"Password seeded for fresh instance\")\nelse:\n    print(\"settings.json already exists, skipping password seed\")\n'\n",
+                                ],
+                                "resources": {"limits": {"cpu": "100m", "memory": "128Mi"}},
                                 "securityContext": {"runAsUser": 0},
                                 "volumeMounts": [
                                     {"mountPath": "/hermes-home", "name": "hermes-home"}
@@ -399,9 +399,7 @@ def deploy_instance(subdomain: str) -> dict:
                                     {"name": "HERMES_NIX_BUILD", "value": "1"},
                                     {"name": "WANTED_UID", "value": "1000"},
                                     {"name": "WANTED_GID", "value": "1000"},
-                                    {"name": "HERMES_WEBUI_ONBOARDING_OPEN", "value": "1"},
-                                    {"name": "HERMES_WEBUI_PASSWORD",
-                                     "valueFrom": {"secretKeyRef": {"name": f"{name}-webui-secret", "key": "password"}}}
+                                    {"name": "HERMES_WEBUI_ONBOARDING_OPEN", "value": "1"}
                                 ]
                             }
                         ],
