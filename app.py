@@ -116,13 +116,17 @@ def build_config() -> str:
     nothink_api_key = os.environ.get("NOTHINK_API_KEY", "")
     nothink_api_url = os.environ.get("NOTHINK_API_URL", "https://api-nothink.ailab.infocepo.com/v1")
     toolsets = os.environ.get("HERMES_TOOLSETS", "hermes-cli")
+    model = os.environ.get("LLM_MODEL", LLM_MODEL)
+    provider = os.environ.get("LLM_PROVIDER", LLM_PROVIDER)
+    base_url = os.environ.get("LLM_BASE_URL", LLM_BASE_URL)
+    api_key = os.environ.get("LLM_API_KEY", LLM_API_KEY)
     return (
         f"model:\n"
-        f"  default: {LLM_MODEL}\n"
-        f"  provider: {LLM_PROVIDER}\n"
+        f"  default: {model}\n"
+        f"  provider: {provider}\n"
         f"  context_length: 262144\n"
-        f"  base_url: {LLM_BASE_URL}\n"
-        f"  api_key: {LLM_API_KEY}\n"
+        f"  base_url: {base_url}\n"
+        f"  api_key: {api_key}\n"
         f"providers:\n"
         f"  ai-nothink:\n"
         f"    name: ai-nothink\n"
@@ -131,17 +135,17 @@ def build_config() -> str:
         f"    api_key: {nothink_api_key}\n"
         f"fallback_providers: []\n"
         f"custom_providers:\n"
-        f"  - name: {LLM_PROVIDER}\n"
-        f"    base_url: {LLM_BASE_URL}\n"
-        f"    api_key: {LLM_API_KEY}\n"
-        f"    model: {LLM_MODEL}\n"
+        f"  - name: {provider}\n"
+        f"    base_url: {base_url}\n"
+        f"    api_key: {api_key}\n"
+        f"    model: {model}\n"
         f"toolsets:\n"
         f"  - {toolsets}"
     )
 
 def deploy_instance(subdomain: str) -> dict:
     subdomain = validate_subdomain(subdomain)
-    hash8 = hashlib.sha256(datetime.now().isoformat().encode()).hexdigest()[:8]
+    hash8 = os.urandom(4).hex()  # 32-bit random, 8 hex chars
     name = f"agent-{hash8}-{subdomain}"
     domain = f"{subdomain}.ailab.infocepo.com"
 
