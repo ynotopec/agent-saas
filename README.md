@@ -29,7 +29,11 @@ Voir [DEPLOY_GUIDE.md](./DEPLOY_GUIDE.md) pour l'installation complète sur un c
 # 1. Prérequis : ingress controller + cert-manager
 # 2. Appliquer les manifests
 kubectl apply -f manifests/01-rbac.yaml -n demo1
-kubectl apply -f manifests/02-secrets.yaml -n demo1
+kubectl -n demo1 create secret generic agents-saas-secrets \
+  --from-literal=LLM_API_KEY='<llm-api-key>' \
+  --from-literal=API_SERVER_KEY='<random-api-server-key>' \
+  --from-literal=DEPLOY_TOKEN='<random-dashboard-token>' \
+  --from-literal=HERMES_WEBUI_PASSWORD='<initial-instance-password>'
 kubectl create configmap agents-saas-app \
   --from-file=app.py=app.py \
   --dry-run=client -o yaml | kubectl apply -f - -n demo1
@@ -50,6 +54,7 @@ Déploie une nouvelle instance agent.
 ```bash
 curl -X POST http://localhost:8000/api/deploy \
   -H "Content-Type: application/json" \
+  -H "X-Deploy-Token: $DEPLOY_TOKEN" \
   -d '{"subdomain": "my-agent"}'
 ```
 
@@ -103,7 +108,6 @@ agent-saas/
 ├── .env.example        # Variables d'environnement
 ├── manifests/          # Manifests K8s complets pour installer le SaaS
 │   ├── 01-rbac.yaml    # ServiceAccount, Role, RoleBinding
-│   ├── 02-secrets.yaml # Secrets (LLM_API_KEY, HERMES_WEBUI_PASSWORD)
 │   ├── 03-deployment.yaml  # Deployment agents-saas
 │   ├── 04-service.yaml     # Service ClusterIP
 │   ├── 05-ingress.yaml     # Ingress avec TLS cert-manager
