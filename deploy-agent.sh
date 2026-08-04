@@ -82,7 +82,7 @@ data:
     model:
       default: ai-thinking
       provider: custom
-      context_length: 262144
+      context_length: ${LLM_CONTEXT_LENGTH:-262144}
       base_url: https://api-nothink.ailab.infocepo.com/v1
       api_key: ${LLM_API_KEY}
     providers:
