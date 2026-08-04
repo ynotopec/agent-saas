@@ -489,11 +489,11 @@ def deploy_instance(subdomain: str) -> dict:
 def index():
     return HTMLResponse(CONTENT)
 
-@app.get("/api/instances", dependencies=[Depends(require_deploy_token)])
+@app.get("/api/instances")
 def api_instances():
     return JSONResponse(list_instances())
 
-@app.post("/api/deploy", dependencies=[Depends(require_deploy_token)])
+@app.post("/api/deploy")
 def api_deploy(req: DeployRequest):
     try:
         result = deploy_instance(req.subdomain)
@@ -571,7 +571,7 @@ def change_password(subdomain: str, new_password: str) -> dict:
     return {"success": True, "subdomain": subdomain}
 
 
-@app.post("/api/change-password", dependencies=[Depends(require_deploy_token)])
+@app.post("/api/change-password")
 def api_change_password(req: ChangePasswordRequest):
     try:
         return JSONResponse(change_password(req.subdomain, req.new_password))
@@ -619,10 +619,6 @@ CONTENT = """<!DOCTYPE html>
             <h2>Déployer une nouvelle instance</h2>
             <form id="deploy-form">
                 <div class="form-group">
-                    <label for="deploy-token">Jeton de déploiement :</label>
-                    <input type="password" id="deploy-token" name="deploy-token" autocomplete="current-password" required>
-                </div>
-                <div class="form-group">
                     <label for="subdomain">Sous-domaine :</label>
                     <input type="text" id="subdomain" name="subdomain" placeholder="ex: mon-projet" required>
                 </div>
@@ -639,7 +635,6 @@ CONTENT = """<!DOCTYPE html>
         async function deploy(e) {
             e.preventDefault();
             const subdomain = document.getElementById('subdomain').value;
-            const deployToken = document.getElementById('deploy-token').value;
             const btn = document.getElementById('deploy-btn');
             const result = document.getElementById('result');
             btn.disabled = true;
@@ -647,7 +642,7 @@ CONTENT = """<!DOCTYPE html>
             try {
                 const resp = await fetch('/api/deploy', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'X-Deploy-Token': deployToken },
+                    headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ subdomain })
                 });
                 const data = await resp.json();
@@ -668,10 +663,7 @@ CONTENT = """<!DOCTYPE html>
         async function loadInstances() {
             const list = document.getElementById('instances-list');
             try {
-                const deployToken = document.getElementById('deploy-token').value;
-                if (!deployToken) { list.innerHTML = '<p>Saisissez le jeton pour afficher les instances.</p>'; return; }
-                const resp = await fetch('/api/instances', { headers: { 'X-Deploy-Token': deployToken } });
-                if (!resp.ok) throw new Error('Authentification refusée');
+                const resp = await fetch('/api/instances');
                 const instances = await resp.json();
                 if (instances.length === 0) {
                     list.innerHTML = '<p>Aucune instance.</p>';
@@ -685,7 +677,6 @@ CONTENT = """<!DOCTYPE html>
             }
         }
         document.getElementById('deploy-form').addEventListener('submit', deploy);
-        document.getElementById('deploy-token').addEventListener('change', loadInstances);
         loadInstances();
     </script>
 </body>
