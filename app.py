@@ -192,12 +192,17 @@ def deploy_instance(subdomain: str) -> dict:
             raise RuntimeError("API_SERVER_KEY is not configured")
         config = build_config()
 
-        for pvc in [f"{name}-data", f"{name}-workspace"]:
+        # Data PVC: 20Gi, Workspace PVC: 5Gi
+        pvc_specs = [
+            (f"{name}-data", "20Gi"),
+            (f"{name}-workspace", "5Gi"),
+        ]
+        for pvc_name, storage in pvc_specs:
             k8s_post("persistentvolumeclaims", {
                 "apiVersion": "v1", "kind": "PersistentVolumeClaim",
-                "metadata": {"name": pvc, "namespace": NAMESPACE, "labels": {"app": "agent-instance"}},
+                "metadata": {"name": pvc_name, "namespace": NAMESPACE, "labels": {"app": "agent-instance"}},
                 "spec": {"accessModes": ["ReadWriteOnce"], "storageClassName": "microk8s-hostpath",
-                         "resources": {"requests": {"storage": "20Gi"}}}
+                         "resources": {"requests": {"storage": storage}}}
             })
 
         k8s_post("configmaps", {
