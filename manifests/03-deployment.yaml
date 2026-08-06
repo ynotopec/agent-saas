@@ -34,6 +34,8 @@ spec:
           value: "infocepo-alias"
         - name: LLM_MODEL
           value: "ai-thinking"
+        - name: LLM_CONTEXT_LENGTH
+          value: "262144"
         - name: API_SERVER_KEY
           valueFrom:
             secretKeyRef:
