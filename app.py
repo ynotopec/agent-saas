@@ -463,8 +463,26 @@ def deploy_instance(subdomain: str) -> dict:
         k8s_post("services", {
             "apiVersion": "v1", "kind": "Service",
             "metadata": {"name": f"{name}-svc", "namespace": NAMESPACE, "labels": {"app": "agent-instance"}},
-            "spec": {"ports": [{"port": 80, "targetPort": 8787}],
+            "spec": {"ports": [{"port": 80, "targetPort": 8787},
+                               {"port": 8642, "targetPort": 8642}],
                      "selector": {"app": "agent-instance", "agent-instance": subdomain}}
+        })
+
+        # Gateway ingress for port 8642 (API gateway)
+        api_domain = f"{subdomain}-api.ailab.infocepo.com"
+        k8s_post("ingresses", {
+            "apiVersion": "networking.k8s.io/v1", "kind": "Ingress",
+            "metadata": {"name": f"{name}-gateway-ingress", "namespace": NAMESPACE,
+                         "annotations": {"cert-manager.io/cluster-issuer": "letsencrypt-prod",
+                                         "nginx.ingress.kubernetes.io/ssl-redirect": "true"}},
+            "spec": {
+                "ingressClassName": "public",
+                "tls": [{"hosts": [api_domain], "secretName": f"{name}-gateway-tls"}],
+                "rules": [{"host": api_domain, "http": {
+                    "paths": [{"path": "/", "pathType": "Prefix",
+                              "backend": {"service": {"name": f"{name}-svc", "port": {"number": 8642}}}}]
+                }}]
+            }
         })
 
         k8s_post("ingresses", {
