@@ -160,7 +160,7 @@ def build_config() -> str:
         f"model:\n"
         f"  default: {model}\n"
         f"  provider: {provider}\n"
-        f"  context_length: {os.environ.get('LLM_CONTEXT_LENGTH', '262144')}\n"
+        f"  context_length: 262144\n"
         f"  base_url: {base_url}\n"
         f"  api_key: {api_key}\n"
         f"providers:\n"
