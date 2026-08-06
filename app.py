@@ -350,7 +350,9 @@ def deploy_instance(subdomain: str) -> dict:
                                     {"name": "HERMES_GATEWAY_NO_SUPERVISE", "value": "1"},
                                     {"name": "MCP_DISABLE", "value": "1"},
                                     {"name": "HERMES_CONFIG", "value": "/etc/hermes-config/config.yaml"},
-                                    {"name": "API_SERVER_KEY", "value": API_SERVER_KEY}
+                                    {"name": "API_SERVER_KEY", "value": API_SERVER_KEY},
+                                    {"name": "API_SERVER_HOST", "value": "0.0.0.0"},
+                                    {"name": "API_SERVER_ENABLED", "value": "true"}
                                 ]
                             },
                             {
@@ -463,8 +465,8 @@ def deploy_instance(subdomain: str) -> dict:
         k8s_post("services", {
             "apiVersion": "v1", "kind": "Service",
             "metadata": {"name": f"{name}-svc", "namespace": NAMESPACE, "labels": {"app": "agent-instance"}},
-            "spec": {"ports": [{"port": 80, "targetPort": 8787},
-                               {"port": 8642, "targetPort": 8642}],
+            "spec": {"ports": [{"name": "webui", "port": 80, "targetPort": 8787},
+                               {"name": "gateway", "port": 8642, "targetPort": 8642}],
                      "selector": {"app": "agent-instance", "agent-instance": subdomain}}
         })
 
