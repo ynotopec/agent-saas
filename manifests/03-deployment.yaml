@@ -75,7 +75,7 @@ spec:
       initContainers:
       - name: install-pip-packages
         image: python:3.12-slim
-        command: ["pip3", "install", "fastapi", "uvicorn", "pydantic", "argon2-cffi", "--target", "/packages"]
+        command: ["pip3", "install", "fastapi", "uvicorn", "pydantic", "argon2-cffi", "trafilatura", "httpx", "--target", "/packages"]
         volumeMounts:
         - name: pip-packages
           mountPath: /packages

@@ -94,6 +94,9 @@ data:
     fallback_providers: []
     toolsets:
       - hermes-cli
+    web:
+      search_backend: ddgs
+      extract_backend: trafilatura
 EOF
 
 # Create Deployment

@@ -5,6 +5,7 @@ import hashlib
 import json
 import re
 import secrets
+from typing import List
 from datetime import datetime
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -156,11 +157,12 @@ def build_config() -> str:
     provider = os.environ.get("LLM_PROVIDER", LLM_PROVIDER)
     base_url = os.environ.get("LLM_BASE_URL", LLM_BASE_URL)
     api_key = os.environ.get("LLM_API_KEY", LLM_API_KEY)
+    context_length = os.environ.get("LLM_CONTEXT_LENGTH", "262144")
     return (
         f"model:\n"
         f"  default: {model}\n"
         f"  provider: {provider}\n"
-        f"  context_length: {os.environ.get('LLM_CONTEXT_LENGTH', '262144')}\n"
+        f"  context_length: {context_length}\n"
         f"  base_url: {base_url}\n"
         f"  api_key: {api_key}\n"
         f"providers:\n"
@@ -176,7 +178,10 @@ def build_config() -> str:
         f"    api_key: {api_key}\n"
         f"    model: {model}\n"
         f"toolsets:\n"
-        f"  - {toolsets}"
+        f"  - {toolsets}\n"
+        f"web:\n"
+        f"  search_backend: ddgs\n"
+        f"  extract_backend: trafilatura\n"
     )
 
 def deploy_instance(subdomain: str) -> dict:
@@ -599,9 +604,80 @@ def api_change_password(req: ChangePasswordRequest):
         raise HTTPException(status_code=400, detail=str(e)) from e
 
 
+class WebExtractRequest(BaseModel):
+    urls: List[str]
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.post("/api/web-extract")
+def api_web_extract(req: WebExtractRequest):
+    """Extract web content from URLs using local trafilatura HTTP service or inline."""
+    import httpx
+    import trafilatura
+
+    trafilatura_url = os.environ.get("TRAFILATURA_LOCAL_URL", "")
+    results = []
+
+    for url in req.urls:
+        content = None
+        extractor = None
+
+        # Try 1: External HTTP service (trafilatura-local on port 8990)
+        if trafilatura_url:
+            try:
+                with httpx.Client(timeout=30.0, follow_redirects=True) as client:
+                    resp = client.post(
+                        f"{trafilatura_url}/extract",
+                        json={"urls": [url], "format": "markdown"},
+                    )
+                    resp.raise_for_status()
+                    data = resp.json()
+                    if data.get("results"):
+                        r = data["results"][0]
+                        if r.get("content"):
+                            content = r["content"]
+                            extractor = "trafilatura-local-http"
+            except Exception:
+                pass  # fall through to inline
+
+        # Try 2: Inline httpx + trafilatura (local library)
+        if content is None:
+            try:
+                with httpx.Client(timeout=30.0, follow_redirects=True) as client:
+                    resp = client.get(url)
+                    resp.raise_for_status()
+                    content = trafilatura.extract(
+                        resp.text,
+                        url=url,
+                        include_comments=False,
+                        favor_precision=True,
+                        output_format="markdown",
+                    )
+                    extractor = "trafilatura-inline"
+            except Exception:
+                content = None
+
+        if content and len(content.strip()) > 10:
+            results.append({
+                "url": url,
+                "title": "",
+                "content": content.strip(),
+                "error": None,
+                "metadata": {"extractor": extractor or "unknown", "format": "markdown"},
+            })
+        else:
+            results.append({
+                "url": url,
+                "title": "",
+                "content": "",
+                "error": "No extractable content found",
+                "metadata": {},
+            })
+    return {"results": results}
 
 CONTENT = """<!DOCTYPE html>
 <html lang="fr">
