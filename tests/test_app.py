@@ -21,6 +21,10 @@ def client(monkeypatch):
     monkeypatch.setattr(app_module, "DEPLOY_TOKEN", "test-deploy-token")
     monkeypatch.setattr(app_module, "HERMES_WEBUI_PASSWORD", "test-webui-password")
     monkeypatch.setattr(app_module, "API_SERVER_KEY", "test-api-server-key")
+    monkeypatch.setattr(app_module, "LLM_API_KEY", "test-llm-key")
+    monkeypatch.setattr(app_module, "LLM_PROVIDER", "test-provider")
+    monkeypatch.setattr(app_module, "LLM_MODEL", "test-model")
+    monkeypatch.setattr(app_module, "LLM_BASE_URL", "https://test.example.com/v1")
     from fastapi.testclient import TestClient
     with TestClient(app) as client:
         yield client
@@ -202,8 +206,9 @@ class TestWebExtractEndpoint:
         data = response.json()
         assert data["results"] == []
 
-    @patch("app.httpx.Client")
-    def test_web_extract_returns_content_on_success(self, mock_client_class, client):
+    @patch("httpx.Client")
+    @patch("trafilatura.extract", return_value="This is test content for extraction. More lines to make it substantial enough.")
+    def test_web_extract_returns_content_on_success(self, mock_extract, mock_client_class, client):
         """Web extract should return extracted content for successful URLs."""
         from unittest.mock import MagicMock
 
@@ -216,19 +221,18 @@ class TestWebExtractEndpoint:
         mock_client.__exit__ = MagicMock(return_value=False)
         mock_client_class.return_value = mock_client
 
-        with patch("app.trafilatura.extract", return_value="This is test content for extraction. More lines to make it substantial enough."):
-            response = client.post(
-                "/api/web-extract",
-                json={"urls": ["https://example.com/test"]},
-            )
-            assert response.status_code == 200
-            data = response.json()
-            assert len(data["results"]) == 1
-            assert data["results"][0]["error"] is None
-            assert "test content" in data["results"][0]["content"]
-            assert data["results"][0]["metadata"]["extractor"] == "trafilatura-inline"
+        response = client.post(
+            "/api/web-extract",
+            json={"urls": ["https://example.com/test"]},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data["results"]) == 1
+        assert data["results"][0]["error"] is None
+        assert "test content" in data["results"][0]["content"]
+        assert data["results"][0]["metadata"]["extractor"] == "trafilatura-inline"
 
-    @patch("app.httpx.Client")
+    @patch("httpx.Client")
     def test_web_extract_handles_failing_url(self, mock_client_class, client):
         """Web extract should return error for URLs that fail."""
         from unittest.mock import MagicMock
@@ -248,8 +252,9 @@ class TestWebExtractEndpoint:
         assert len(data["results"]) == 1
         assert data["results"][0]["error"] is not None
 
-    @patch("app.httpx.Client")
-    def test_web_extract_multiple_urls(self, mock_client_class, client):
+    @patch("httpx.Client")
+    @patch("trafilatura.extract", return_value="Test content.")
+    def test_web_extract_multiple_urls(self, mock_extract, mock_client_class, client):
         """Web extract should handle multiple URLs in one request."""
         from unittest.mock import MagicMock
 
@@ -262,18 +267,17 @@ class TestWebExtractEndpoint:
         mock_client.__exit__ = MagicMock(return_value=False)
         mock_client_class.return_value = mock_client
 
-        with patch("app.trafilatura.extract", return_value="Test content."):
-            response = client.post(
-                "/api/web-extract",
-                json={"urls": ["https://example.com/1", "https://example.com/2"]},
-            )
-            assert response.status_code == 200
-            data = response.json()
-            assert len(data["results"]) == 2
-            for r in data["results"]:
-                assert r["error"] is None
+        response = client.post(
+            "/api/web-extract",
+            json={"urls": ["https://example.com/1", "https://example.com/2"]},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data["results"]) == 2
+        for r in data["results"]:
+            assert r["error"] is None
 
-    @patch("app.httpx.Client")
+    @patch("httpx.Client")
     def test_web_extract_prefers_http_service_when_configured(self, mock_client_class, client):
         """When TRAFILATURA_LOCAL_URL is set, HTTP service should be tried first."""
         from unittest.mock import MagicMock

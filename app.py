@@ -519,14 +519,17 @@ def api_instances():
     return JSONResponse(list_instances())
 
 @app.post("/api/deploy")
-def api_deploy(req: DeployRequest):
+def api_deploy(req: DeployRequest, x_deploy_token: str | None = Header(default=None)):
     try:
+        require_deploy_token(x_deploy_token)
         result = deploy_instance(req.subdomain)
         if "error" in result:
             raise HTTPException(status_code=502, detail=result["error"])
         return JSONResponse(result)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+    except HTTPException:
+        raise
 
 def change_password(subdomain: str, new_password: str) -> dict:
     """Change instance password: hash, create job to update PVC, restart deployment."""
