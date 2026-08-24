@@ -133,20 +133,27 @@ def k8s_patch(resource_type, name, body):
 
 def list_instances():
     res = k8s_get("pods", label_selector="app=agent-instance")
-    instances = []
+    # Deduplicate by agent-instance subdomain label: keep at most one pod
+    # per subdomain, preferring Running pods over other phases.
+    best: dict[str, dict] = {}
     for pod in res.get("items", []):
         labels = pod.get("metadata", {}).get("labels", {})
-        if labels.get("app") == "agent-instance":
-            name = pod["metadata"]["name"]
-            name_parts = name.replace("agent-", "").split("-", 1)
-            subdomain = labels.get("agent-instance") or (name_parts[1] if len(name_parts) > 1 else name)
-            instances.append({
-                "name": name,
-                "subdomain": subdomain,
-                "url": f"https://{subdomain}.ailab.infocepo.com",
-                "status": pod.get("status", {}).get("phase", "Unknown")
-            })
-    return instances
+        if labels.get("app") != "agent-instance":
+            continue
+        name = pod["metadata"]["name"]
+        name_parts = name.replace("agent-", "").split("-", 1)
+        subdomain = labels.get("agent-instance") or (name_parts[1] if len(name_parts) > 1 else name)
+        status = pod.get("status", {}).get("phase", "Unknown")
+        entry = {
+            "name": name,
+            "subdomain": subdomain,
+            "url": f"https://{subdomain}.ailab.infocepo.com",
+            "status": status
+        }
+        # Prefer Running over any other phase
+        if subdomain not in best or status == "Running":
+            best[subdomain] = entry
+    return list(best.values())
 
 def build_config() -> str:
     """Generate hermes config.yaml from env vars or defaults."""
