@@ -34,11 +34,14 @@ API_SERVER_KEY = os.environ.get("API_SERVER_KEY", "")
 SUBDOMAIN_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 
 def require_deploy_token(x_deploy_token: str | None = Header(default=None)) -> None:
-    """Require a shared token for state-changing dashboard operations."""
-    if not DEPLOY_TOKEN:
-        raise HTTPException(status_code=503, detail="Deployment API is not configured")
-    if not x_deploy_token or not secrets.compare_digest(x_deploy_token, DEPLOY_TOKEN):
-        raise HTTPException(status_code=401, detail="Invalid deployment token")
+    """Require a shared token for state-changing dashboard operations.
+
+    When DEPLOY_TOKEN is empty (default), authentication is skipped entirely.
+    Set DEPLOY_TOKEN in the environment (or .env) to enable token-based auth.
+    """
+    if DEPLOY_TOKEN:
+        if not x_deploy_token or not secrets.compare_digest(x_deploy_token, DEPLOY_TOKEN):
+            raise HTTPException(status_code=401, detail="Invalid deployment token")
 
 
 def validate_subdomain(subdomain: str) -> str:
@@ -751,13 +754,21 @@ CONTENT = """<!DOCTYPE html>
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ subdomain })
                 });
-                const data = await resp.json();
-                if (data.success) {
-                    result.innerHTML = '<div class="result success">✅ Déployé !<br><a href="' + data.url + '" target="_blank">' + data.url + '</a></div>';
-                    document.getElementById('subdomain').value = '';
-                    loadInstances();
+                let data;
+                try { data = await resp.json(); } catch { data = { error: 'Bad response' }; }
+
+                const errorMsg = (data.error || data.detail || 'Erreur inconnue').toString();
+
+                if (resp.status === 200) {
+                    if (data.success) {
+                        result.innerHTML = '<div class="result success">✅ Déployé !<br><a href="' + data.url + '" target="_blank">' + data.url + '</a></div>';
+                        document.getElementById('subdomain').value = '';
+                        loadInstances();
+                    } else {
+                        result.innerHTML = '<div class="result error">❌ ' + errorMsg + '</div>';
+                    }
                 } else {
-                    result.innerHTML = '<div class="result error">❌ ' + (data.error || 'Erreur') + '</div>';
+                    result.innerHTML = '<div class="result error">❌ Erreur ' + resp.status + ' : ' + errorMsg + '</div>';
                 }
             } catch (err) {
                 result.innerHTML = '<div class="result error">❌ ' + err.message + '</div>';
@@ -766,6 +777,7 @@ CONTENT = """<!DOCTYPE html>
                 btn.textContent = 'Déployer';
             }
         }
+
         async function loadInstances() {
             const list = document.getElementById('instances-list');
             try {
@@ -782,6 +794,7 @@ CONTENT = """<!DOCTYPE html>
                 list.innerHTML = '<p>Erreur : ' + err.message + '</p>';
             }
         }
+
         document.getElementById('deploy-form').addEventListener('submit', deploy);
         loadInstances();
     </script>
