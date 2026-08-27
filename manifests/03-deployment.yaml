@@ -41,11 +41,6 @@ spec:
             secretKeyRef:
               name: agents-saas-secrets
               key: API_SERVER_KEY
-        - name: DEPLOY_TOKEN
-          valueFrom:
-            secretKeyRef:
-              name: agents-saas-secrets
-              key: DEPLOY_TOKEN
         - name: HERMES_WEBUI_PASSWORD
           valueFrom:
             secretKeyRef:
