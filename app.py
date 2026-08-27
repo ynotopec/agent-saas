@@ -34,11 +34,14 @@ API_SERVER_KEY = os.environ.get("API_SERVER_KEY", "")
 SUBDOMAIN_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 
 def require_deploy_token(x_deploy_token: str | None = Header(default=None)) -> None:
-    """Require a shared token for state-changing dashboard operations."""
-    if not DEPLOY_TOKEN:
-        raise HTTPException(status_code=503, detail="Deployment API is not configured")
-    if not x_deploy_token or not secrets.compare_digest(x_deploy_token, DEPLOY_TOKEN):
-        raise HTTPException(status_code=401, detail="Invalid deployment token")
+    """Require a shared token for state-changing dashboard operations.
+
+    When DEPLOY_TOKEN is empty (default), authentication is skipped entirely.
+    Set DEPLOY_TOKEN in the environment (or .env) to enable token-based auth.
+    """
+    if DEPLOY_TOKEN:
+        if not x_deploy_token or not secrets.compare_digest(x_deploy_token, DEPLOY_TOKEN):
+            raise HTTPException(status_code=401, detail="Invalid deployment token")
 
 
 def validate_subdomain(subdomain: str) -> str:
@@ -716,23 +719,11 @@ CONTENT = """<!DOCTYPE html>
         .instance-item { background: #f8f9fa; padding: 1rem; border-radius: 4px; margin-bottom: 0.5rem; display: flex; justify-content: space-between; align-items: center; }
         .instance-item a { color: #1a73e8; text-decoration: none; }
         .instance-item a:hover { text-decoration: underline; }
-        .auth-card { background: #fff3cd; padding: 1rem 1.25rem; border-radius: 8px; margin-bottom: 1rem; border: 1px solid #ffc107; }
-        .auth-card input { width: 250px; padding: 0.5rem 0.75rem; border: 1px solid #ddd; border-radius: 4px; font-size: 0.9rem; }
-        .auth-card button { padding: 0.5rem 1rem; font-size: 0.9rem; }
-        .deploy-form-container { display: block; }
-        .deploy-form-container.hidden { display: none; }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>🚀 Agents SaaS Dashboard</h1>
-        <div class="auth-card" id="auth-card">
-            <strong>🔑 Authentification requise</strong>
-            <p style="margin: 0.5rem 0;">Entrez votre token de déploiement :</p>
-            <input type="password" id="deploy-token-input" placeholder="Déployer token...">
-            <button onclick="verifyToken()">Vérifier</button>
-            <div id="token-status" style="margin-top:0.5rem;"></div>
-        </div>
         <div class="card">
             <h2>Déployer une nouvelle instance</h2>
             <form id="deploy-form">
@@ -750,45 +741,6 @@ CONTENT = """<!DOCTYPE html>
         </div>
     </div>
     <script>
-        const TOKEN_KEY = 'agentsaas_deploy_token';
-        let tokenVerified = false;
-
-        function getToken() {
-            return localStorage.getItem(TOKEN_KEY) || '';
-        }
-
-        async function verifyToken() {
-            const input = document.getElementById('deploy-token-input');
-            const status = document.getElementById('token-status');
-            const token = input.value;
-            if (!token) {
-                status.innerHTML = '<span style="color:red;">Veuillez entrer un token.</span>';
-                return;
-            }
-            // Test the token against a lightweight endpoint
-            try {
-                const resp = await fetch('/api/instances', {
-                    headers: { 'x-deploy-token': token }
-                });
-                if (resp.status === 200) {
-                    localStorage.setItem(TOKEN_KEY, token);
-                    tokenVerified = true;
-                    status.innerHTML = '<span style="color:green;">✅ Token vérifié !</span>';
-                    document.getElementById('auth-card').style.display = 'none';
-                } else {
-                    localStorage.removeItem(TOKEN_KEY);
-                    tokenVerified = false;
-                    status.innerHTML = '<span style="color:red;">❌ Token invalide.</span>';
-                }
-            } catch {
-                // If even /api/instances fails, store anyway (token check on deploy is authoritative)
-                localStorage.setItem(TOKEN_KEY, token);
-                tokenVerified = true;
-                status.innerHTML = '<span style="color:green;">✅ Token enregistré !</span>';
-                document.getElementById('auth-card').style.display = 'none';
-            }
-        }
-
         async function deploy(e) {
             e.preventDefault();
             const subdomain = document.getElementById('subdomain').value;
@@ -797,19 +749,14 @@ CONTENT = """<!DOCTYPE html>
             btn.disabled = true;
             btn.textContent = 'Déploiement...';
             try {
-                const token = getToken();
                 const resp = await fetch('/api/deploy', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'x-deploy-token': token
-                    },
+                    headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ subdomain })
                 });
                 let data;
                 try { data = await resp.json(); } catch { data = { error: 'Bad response' }; }
 
-                // FastAPI HTTPException returns {"detail": "..."} not {"error": "..."}
                 const errorMsg = (data.error || data.detail || 'Erreur inconnue').toString();
 
                 if (resp.status === 200) {
@@ -820,12 +767,6 @@ CONTENT = """<!DOCTYPE html>
                     } else {
                         result.innerHTML = '<div class="result error">❌ ' + errorMsg + '</div>';
                     }
-                } else if (resp.status === 401 || resp.status === 403) {
-                    localStorage.removeItem(TOKEN_KEY);
-                    tokenVerified = false;
-                    document.getElementById('auth-card').style.display = 'block';
-                    document.getElementById('token-status').innerHTML = '<span style="color:red;">❌ Token invalide. Redemandez le bon token à votre administrateur.</span>';
-                    result.innerHTML = '<div class="result error">❌ Authentification requise. Entrez votre token de déploiement ci-dessus, puis réessayez.</div>';
                 } else {
                     result.innerHTML = '<div class="result error">❌ Erreur ' + resp.status + ' : ' + errorMsg + '</div>';
                 }
@@ -853,14 +794,6 @@ CONTENT = """<!DOCTYPE html>
                 list.innerHTML = '<p>Erreur : ' + err.message + '</p>';
             }
         }
-
-        document.addEventListener('DOMContentLoaded', function() {
-            const saved = getToken();
-            if (saved) {
-                tokenVerified = true;
-                document.getElementById('auth-card').style.display = 'none';
-            }
-        });
 
         document.getElementById('deploy-form').addEventListener('submit', deploy);
         loadInstances();
