@@ -258,6 +258,11 @@ def deploy_instance(subdomain: str) -> dict:
                         }
                     },
                     "spec": {
+                        # Tenant workloads never call the Kubernetes API.  Do not
+                        # expose a namespace credential to code or tools running
+                        # inside Hermes, even if the default ServiceAccount is
+                        # accidentally granted permissions by the cluster.
+                        "automountServiceAccountToken": False,
                         "securityContext": {
                             "fsGroup": 1000,
                             "runAsGroup": 1000,
@@ -576,6 +581,7 @@ def change_password(subdomain: str, new_password: str) -> dict:
         "kind": "Pod",
         "metadata": {"name": job_name, "namespace": NAMESPACE, "labels": {"app": "agent-instance", "job-type": "password-update"}},
         "spec": {
+            "automountServiceAccountToken": False,
             "containers": [{
                 "name": "update-password",
                 "image": "python:3.12-alpine",

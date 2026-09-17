@@ -9,6 +9,7 @@ Dashboard FastAPI pour gérer des instances Hermes sur Kubernetes. Crée, liste 
 - **2 PVCs** : `{name}-data` (config, sessions), `{name}-workspace` (fichiers de travail).
 - **1 ConfigMap** : `{name}-config` (config.yaml générée depuis les variables d'environnement).
 - **1 Ingress** par instance avec cert-manager TLS sur `*.ailab.infocepo.com`.
+- **Isolation Kubernetes** : les pods Hermes ne montent aucun token de ServiceAccount et ne peuvent donc pas réutiliser les droits Kubernetes du namespace.
 
 ## Quick Start
 
@@ -44,6 +45,36 @@ kubectl apply -f manifests/05-ingress.yaml -n demo1
 # 3. Vérifier
 kubectl -n demo1 rollout status deploy/agents-saas --timeout=60s
 ```
+
+### Corriger les instances Hermes existantes
+
+Mettre à jour le code ne retire pas le token des pods déjà démarrés. Le script
+de migration applique `automountServiceAccountToken: false` à tous les
+Deployments portant le label `app=agent-instance`, attend leur redémarrage et
+vérifie qu'aucun nouveau pod ne contient de volume `kube-api-access-*` :
+
+```bash
+# Le namespace vaut demo1 par défaut ; passez-le en argument s'il est différent.
+./scripts/harden-existing-hermes.sh demo1
+```
+
+La même correction peut être appliquée manuellement :
+
+```bash
+kubectl -n demo1 get deployment -l app=agent-instance -o name |
+while read -r deploy; do
+  kubectl -n demo1 patch "$deploy" --type=merge \
+    -p '{"spec":{"template":{"spec":{"automountServiceAccountToken":false}}}}'
+done
+
+kubectl -n demo1 rollout status deployment -l app=agent-instance --timeout=5m
+```
+
+Le changement du template déclenche automatiquement le remplacement des pods :
+il est important d'attendre la fin du rollout, car les anciens pods conservent
+leur token jusqu'à leur suppression. Pour finir, vérifiez aussi les éventuels
+`RoleBinding`/`ClusterRoleBinding` accordés au ServiceAccount `default` et
+supprimez ceux qui ne sont pas nécessaires.
 
 ## API
 
