@@ -61,8 +61,12 @@ vérifie qu'aucun nouveau pod ne contient de volume `kube-api-access-*` :
 La même correction peut être appliquée manuellement :
 
 ```bash
-kubectl -n demo1 patch deployment -l app=agent-instance --type=merge \
-  -p '{"spec":{"template":{"spec":{"automountServiceAccountToken":false}}}}'
+kubectl -n demo1 get deployment -l app=agent-instance -o name |
+while read -r deploy; do
+  kubectl -n demo1 patch "$deploy" --type=merge \
+    -p '{"spec":{"template":{"spec":{"automountServiceAccountToken":false}}}}'
+done
+
 kubectl -n demo1 rollout status deployment -l app=agent-instance --timeout=5m
 ```
 

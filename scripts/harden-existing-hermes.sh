@@ -12,7 +12,7 @@ command -v kubectl >/dev/null 2>&1 || {
 
 mapfile -t deployments < <(
   kubectl -n "${NAMESPACE}" get deployments -l "${SELECTOR}" \
-    -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}'
+    -o name
 )
 
 if ((${#deployments[@]} == 0)); then
@@ -22,15 +22,13 @@ fi
 
 echo "Disabling ServiceAccount token mounts on ${#deployments[@]} Hermes deployment(s)..."
 for deployment in "${deployments[@]}"; do
-  kubectl -n "${NAMESPACE}" patch deployment "${deployment}" --type=merge \
+  kubectl -n "${NAMESPACE}" patch "${deployment}" --type=merge \
     -p '{"spec":{"template":{"spec":{"automountServiceAccountToken":false}}}}'
 done
 
 # Changing the pod template starts a rollout. Waiting here ensures that pods
 # which still contain an already-issued token have actually disappeared.
-for deployment in "${deployments[@]}"; do
-  kubectl -n "${NAMESPACE}" rollout status "deployment/${deployment}" --timeout=5m
-done
+kubectl -n "${NAMESPACE}" rollout status deployment -l "${SELECTOR}" --timeout=5m
 
 remaining="$({
   kubectl -n "${NAMESPACE}" get pods -l "${SELECTOR}" \
