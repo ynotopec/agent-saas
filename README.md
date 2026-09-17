@@ -9,6 +9,7 @@ Dashboard FastAPI pour gérer des instances Hermes sur Kubernetes. Crée, liste 
 - **2 PVCs** : `{name}-data` (config, sessions), `{name}-workspace` (fichiers de travail).
 - **1 ConfigMap** : `{name}-config` (config.yaml générée depuis les variables d'environnement).
 - **1 Ingress** par instance avec cert-manager TLS sur `*.ailab.infocepo.com`.
+- **Isolation Kubernetes** : les pods Hermes ne montent aucun token de ServiceAccount et ne peuvent donc pas réutiliser les droits Kubernetes du namespace.
 
 ## Quick Start
 
@@ -44,6 +45,11 @@ kubectl apply -f manifests/05-ingress.yaml -n demo1
 # 3. Vérifier
 kubectl -n demo1 rollout status deploy/agents-saas --timeout=60s
 ```
+
+> Après une mise à jour depuis une version antérieure, recréez les pods Hermes
+> existants (ou relancez leur Deployment) pour retirer les tokens déjà montés.
+> Vous pouvez vérifier l'isolation avec
+> `kubectl -n demo1 exec <pod-hermes> -- test ! -e /var/run/secrets/kubernetes.io/serviceaccount/token`.
 
 ## API
 

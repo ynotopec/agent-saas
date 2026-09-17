@@ -125,6 +125,9 @@ spec:
         agent-instance: '${SUBDOMAIN}'
         agent-hash: '${HASH}'
     spec:
+      # Hermes does not need Kubernetes API access.  In particular, do not
+      # inherit a token from a permissive default ServiceAccount.
+      automountServiceAccountToken: false
       securityContext:
         fsGroup: 1000
         runAsGroup: 1000

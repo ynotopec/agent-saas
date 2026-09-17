@@ -24,6 +24,7 @@ spec:
       {{- end }}
     spec:
       serviceAccountName: {{ include "hermes-webui.serviceAccountName" . }}
+      automountServiceAccountToken: false
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       {{- if and .Values.hermesConfig.seed.enabled .Values.persistentStorage.hermesHome.enabled }}

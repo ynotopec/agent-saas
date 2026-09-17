@@ -115,6 +115,19 @@ class TestDeployEndpoint:
         response = client.post("/api/deploy", headers=AUTH_HEADERS, json={"subdomain": "INVALID"})
         assert response.status_code == 400
 
+    @patch("app.k8s_post")
+    def test_deploy_does_not_mount_service_account_token(self, mock_k8s_post, client):
+        """Tenant pods must not receive Kubernetes API credentials."""
+        response = client.post("/api/deploy", headers=AUTH_HEADERS, json={"subdomain": "isolated"})
+
+        assert response.status_code == 200
+        deployment = next(
+            call.args[1]
+            for call in mock_k8s_post.call_args_list
+            if call.args[0] == "deployments"
+        )
+        assert deployment["spec"]["template"]["spec"]["automountServiceAccountToken"] is False
+
 
 class TestConfigGeneration:
     """Tests for config.yaml generation."""
@@ -161,6 +174,8 @@ class TestChangePasswordEndpoint:
         data = response.json()
         assert data["success"] is True
         assert data["subdomain"] == "test"
+        password_pod = mock_k8s_post.call_args.args[1]
+        assert password_pod["spec"]["automountServiceAccountToken"] is False
 
     @patch("app.k8s_post")
     def test_change_password_rejects_empty_password(self, mock_k8s_post, client):
