@@ -46,10 +46,31 @@ kubectl apply -f manifests/05-ingress.yaml -n demo1
 kubectl -n demo1 rollout status deploy/agents-saas --timeout=60s
 ```
 
-> Après une mise à jour depuis une version antérieure, recréez les pods Hermes
-> existants (ou relancez leur Deployment) pour retirer les tokens déjà montés.
-> Vous pouvez vérifier l'isolation avec
-> `kubectl -n demo1 exec <pod-hermes> -- test ! -e /var/run/secrets/kubernetes.io/serviceaccount/token`.
+### Corriger les instances Hermes existantes
+
+Mettre à jour le code ne retire pas le token des pods déjà démarrés. Le script
+de migration applique `automountServiceAccountToken: false` à tous les
+Deployments portant le label `app=agent-instance`, attend leur redémarrage et
+vérifie qu'aucun nouveau pod ne contient de volume `kube-api-access-*` :
+
+```bash
+# Le namespace vaut demo1 par défaut ; passez-le en argument s'il est différent.
+./scripts/harden-existing-hermes.sh demo1
+```
+
+La même correction peut être appliquée manuellement :
+
+```bash
+kubectl -n demo1 patch deployment -l app=agent-instance --type=merge \
+  -p '{"spec":{"template":{"spec":{"automountServiceAccountToken":false}}}}'
+kubectl -n demo1 rollout status deployment -l app=agent-instance --timeout=5m
+```
+
+Le changement du template déclenche automatiquement le remplacement des pods :
+il est important d'attendre la fin du rollout, car les anciens pods conservent
+leur token jusqu'à leur suppression. Pour finir, vérifiez aussi les éventuels
+`RoleBinding`/`ClusterRoleBinding` accordés au ServiceAccount `default` et
+supprimez ceux qui ne sont pas nécessaires.
 
 ## API
 
