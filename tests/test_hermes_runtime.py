@@ -215,3 +215,33 @@ def test_pvc_reconciliation_rejects_invalid_or_symlink_env(tmp_path, monkeypatch
         exec(runtime.RECONCILE_ENV, {})
     assert env.read_text() == before
     assert not (tmp_path / 'backups').exists()
+
+
+@pytest.mark.parametrize('key_source', ['literal', 'inherited-secret', 'new-secret'])
+def test_shared_home_writers_receive_same_gateway_key(existing, key_source):
+    spec = existing['spec']['template']['spec']
+    agent = next(c for c in spec['containers'] if c['name'] == 'hermes-agent')
+    dashboard = next(c for c in spec['containers'] if c['name'] == 'hermes-dashboard')
+    key = {'name': 'API_SERVER_KEY', 'value': 'explicit-agent-key'} if key_source == 'literal' else {
+        'name': 'API_SERVER_KEY', 'valueFrom': {'secretKeyRef': {'name': 'inherited-key', 'key': 'api-key'}}}
+    agent['env'] = runtime._put(agent['env'], key)
+    dashboard['env'] += [{'name': 'API_SERVER_KEY', 'value': 'stale-dashboard-key'},
+                         {'name': 'API_SERVER_KEY', 'value': 'duplicate-dashboard-key'}]
+    fixed = runtime.repair_pod_spec(spec, 'test', gateway_secret='new-key' if key_source == 'new-secret' else None)
+    containers = {c['name']: c for c in fixed['containers']}
+    expected = {'name': 'API_SERVER_KEY', 'valueFrom': {'secretKeyRef': {'name': 'new-key', 'key': 'API_SERVER_KEY'}}} if key_source == 'new-secret' else key
+    for name in ('hermes-agent', 'hermes-dashboard'):
+        assert [e for e in containers[name]['env'] if e['name'] == 'API_SERVER_KEY'] == [expected]
+    assert next(e for e in containers['hermes-webui']['env'] if e['name'] == 'HERMES_WEBUI_GATEWAY_API_KEY') == dict(expected, name='HERMES_WEBUI_GATEWAY_API_KEY')
+    assert runtime.repair_pod_spec(fixed, 'test') == fixed
+    assert dashboard['env'][-1]['value'] == 'duplicate-dashboard-key'
+
+
+def test_new_deployment_provisions_shared_key_and_webui_password(release):
+    obj = runtime.render_deployment('new-agent', 'demo1', 'new', 'hash', secret_name='runtime-secret')
+    containers = {c['name']: c for c in obj['items'][0]['spec']['template']['spec']['containers']}
+    for name in ('hermes-agent', 'hermes-dashboard'):
+        key = next(e for e in containers[name]['env'] if e['name'] == 'API_SERVER_KEY')
+        assert key['valueFrom']['secretKeyRef'] == {'name': 'runtime-secret', 'key': 'API_SERVER_KEY'}
+    password = next(e for e in containers['hermes-webui']['env'] if e['name'] == 'HERMES_WEBUI_PASSWORD')
+    assert password['valueFrom']['secretKeyRef'] == {'name': 'runtime-secret', 'key': 'password'}

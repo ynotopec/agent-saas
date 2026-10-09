@@ -148,6 +148,11 @@ def repair_pod_spec(spec, name, *, password_secret=None, gateway_secret=None, im
         containers["hermes-agent"]["env"] = _put(containers["hermes-agent"].get("env", []), key)
     if key is None or ("value" in key and not key["value"].strip()):
         raise ValueError("Agent API_SERVER_KEY is missing; cannot configure gateway authentication")
+    # Both official Agent images run stage2 against the same home. Without
+    # this key, the dashboard generates a new .env key after init reconciliation.
+    if "hermes-dashboard" in containers:
+        dashboard = containers["hermes-dashboard"]
+        dashboard["env"] = _put(dashboard.get("env", []), copy.deepcopy(key))
     agent = containers["hermes-agent"]
     home_env = next((e for e in agent.get("env", []) if e["name"] == "HERMES_HOME"),
                     {"name": "HERMES_HOME", "value": "/home/hermes/.hermes"})

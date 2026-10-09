@@ -20,8 +20,10 @@ with urllib.request.urlopen(webui + '/health', timeout=5) as response:
     assert response.status == 200
 key = os.environ.get('HERMES_WEBUI_GATEWAY_API_KEY', '').strip()
 password = os.environ.get('HERMES_WEBUI_PASSWORD', '')
-if not key or not password:
-    raise RuntimeError('Canary requires gateway key and WebUI password in container env')
+if not key:
+    raise RuntimeError('Canary requires HERMES_WEBUI_GATEWAY_API_KEY in container env')
+if not password:
+    raise RuntimeError('Canary prerequisite missing: provide HERMES_WEBUI_PASSWORD via Secret; settings.json password_hash cannot supply a login password')
 gateway = (os.environ.get('HERMES_WEBUI_GATEWAY_BASE_URL') or os.environ.get('HERMES_API_URL') or 'http://127.0.0.1:8642').rstrip('/')
 prompt = 'Reply with exactly PONG. Do not use tools.'
 

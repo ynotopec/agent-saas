@@ -10,7 +10,7 @@ import urllib.error
 import pytest
 
 
-@pytest.mark.parametrize('failure', [None, 'gateway-key', 'webui-chat', 'missing-reply'])
+@pytest.mark.parametrize('failure', [None, 'gateway-key', 'webui-chat', 'missing-reply', 'missing-password'])
 def test_canary_checks_authenticated_chats(monkeypatch, failure):
     calls = []
 
@@ -62,7 +62,7 @@ def test_canary_checks_authenticated_chats(monkeypatch, failure):
     monkeypatch.setitem(sys.modules, 'run_agent', agent)
     monkeypatch.setitem(sys.modules, 'api.auth', auth)
     monkeypatch.setenv('HERMES_WEBUI_GATEWAY_API_KEY', 'container-key')
-    monkeypatch.setenv('HERMES_WEBUI_PASSWORD', 'container-password')
+    monkeypatch.setenv('HERMES_WEBUI_PASSWORD', '' if failure == 'missing-password' else 'container-password')
     monkeypatch.delenv('HERMES_WEBUI_COOKIE_NAME', raising=False)
     with http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler) as server:
         thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
@@ -75,6 +75,9 @@ def test_canary_checks_authenticated_chats(monkeypatch, failure):
                 exec(compile(script, 'hermes-canary.py', 'exec'), {})
         finally:
             server.shutdown(); thread.join()
+    if failure == 'missing-password':
+        assert calls == ['/health']
+        return
     assert '/v1/chat/completions' in calls
     if failure != 'gateway-key':
         assert '/api/chat/start' in calls and '/api/chat/stream?stream_id=canary-stream' in calls

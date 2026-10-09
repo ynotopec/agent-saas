@@ -135,11 +135,18 @@ python3 scripts/hermes-release.py validate --namespace demo1 \
 Le validateur exige deux vrais tours LLM : un chat authentifié direct au gateway,
 puis un login WebUI, une session et un chat via ses API avec réponse `PONG`.
 Il utilise les credentials du conteneur sans les afficher ; le mot de passe
-`HERMES_WEBUI_PASSWORD` doit y être défini. Ce contrôle consomme des tokens et
+`HERMES_WEBUI_PASSWORD` doit y être défini. Le SaaS le provisionne déjà via
+le Secret runtime de chaque nouvelle instance. Les instances historiques
+utilisant seulement `settings.json/password_hash` peuvent être saines sans
+cette variable : le validateur signale alors une précondition manquante.
+La migration conserve leur authentification ; fournir explicitement un mot
+de passe via Secret pour le test, puis restaurer leur mode d’authentification
+si nécessaire. Ce contrôle consomme des tokens et
 laisse une session canari pour inspection. Un 401, une erreur SSE ou une réponse
 absente fait échouer le contrôle ; il n’est jamais exécuté par les probes.
 Les tests Docker CI vérifient le PVC avec une ancienne clé, la nouvelle clé et
-le redémarrage sur l’état persistant ; les vrais chats exigent la configuration
+le redémarrage de l’agent **et du dashboard**, partageant le même home,
+sans régénération de clé ; les vrais chats exigent la configuration
 LLM du canari cluster.
 
 Vérifier ensuite un outil et l'accès au workspace dans le navigateur.
@@ -156,7 +163,9 @@ WebUI natif. Elle retire aussi `HERMES_GATEWAY_NO_SUPERVISE` et les arguments
 `--no-supervise`, pour conserver la supervision s6 officielle.
 
 Un init container retire la clé `API_SERVER_KEY` du `.env` hérité lorsque la
-clé explicite du conteneur existe (même source Secret que la WebUI). Les autres
+clé explicite du conteneur existe. Cette même valeur ou référence Secret
+est transmise à l’agent, au dashboard et à la WebUI : les deux stage2 doivent
+éviter de générer une nouvelle clé dans le home partagé. Les autres
 paramètres sont conservés ; une sauvegarde privée est créée dans le PVC sous
 `backups/runtime-repair/`. Le nettoyage est idempotent. Les fichiers invalides
 ou les liens symboliques font échouer la réparation sans réécriture.

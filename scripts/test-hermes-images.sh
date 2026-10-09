@@ -13,8 +13,9 @@ cleanup() {
   if [ "$result" -ne 0 ]; then
     docker logs "$TEST_PREFIX-webui" || true
     docker logs "$TEST_PREFIX-agent" || true
+    docker logs "$TEST_PREFIX-dashboard" || true
   fi
-  docker rm -f "$TEST_PREFIX-webui" "$TEST_PREFIX-agent" >/dev/null 2>&1 || true
+  docker rm -f "$TEST_PREFIX-webui" "$TEST_PREFIX-agent" "$TEST_PREFIX-dashboard" >/dev/null 2>&1 || true
   docker network rm "$TEST_PREFIX-net" >/dev/null 2>&1 || true
   # Container-owned files may require root cleanup; CI runners are disposable.
   rm -rf "$TEST_ROOT" 2>/dev/null || true
@@ -50,6 +51,23 @@ docker run -d --name "$TEST_PREFIX-agent" --network "$TEST_PREFIX-net" \
   -v "$TEST_ROOT/home:/home/hermes/.hermes" \
   -v "$TEST_ROOT/workspace:/workspace" \
   "$AGENT_IMAGE" gateway run >/dev/null
+# Dashboard stage2 also sees the same persistent home and must not mint a key.
+docker run -d --name "$TEST_PREFIX-dashboard" --network "$TEST_PREFIX-net" \
+  -e HERMES_HOME=/home/hermes/.hermes -e HERMES_UID=1000 -e HERMES_GID=1000 \
+  -e API_SERVER_KEY=hermes-ci-disposable-key \
+  -v "$TEST_ROOT/home:/home/hermes/.hermes" \
+  "$AGENT_IMAGE" dashboard --host 127.0.0.1 >/dev/null
+wait_dashboard() {
+  for attempt in $(seq 1 60); do
+    if docker exec "$TEST_PREFIX-dashboard" python3 -c \
+      'import socket; socket.create_connection(("127.0.0.1",9119),timeout=3).close()' >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 2
+  done
+  echo "Dashboard did not start" >&2
+  return 1
+}
 # No entrypoint, CMD or Python override; the official WebUI performs installation.
 docker run -d --name "$TEST_PREFIX-webui" --network "$TEST_PREFIX-net" \
   -e HERMES_WEBUI_HOST=0.0.0.0 -e HERMES_WEBUI_PORT=8787 \
@@ -71,7 +89,9 @@ for attempt in $(seq 1 120); do
     docker exec --user 1000 "$TEST_PREFIX-webui" /app/venv/bin/python -c \
       'import socket,sys; s=socket.create_connection((sys.argv[1],8642),timeout=5); s.close(); print("Gateway reachable")' "$TEST_PREFIX-agent"
     # Restart over the persisted gateway state to catch supervision collisions.
-    docker restart "$TEST_PREFIX-agent" >/dev/null
+    wait_dashboard
+    docker restart "$TEST_PREFIX-agent" "$TEST_PREFIX-dashboard" >/dev/null
+    wait_dashboard
     docker exec --user 1000 "$TEST_PREFIX-webui" /app/venv/bin/python -c '
 import json, os, time, urllib.error, urllib.request
 url = os.environ["HERMES_API_URL"] + "/v1/models"
@@ -90,7 +110,11 @@ except urllib.error.HTTPError as exc:
     assert exc.code == 401
 else:
     raise RuntimeError("Gateway accepted the stale PVC key")
-print("Persisted-home restart + reconciled gateway authentication OK")
+from pathlib import Path
+from dotenv import dotenv_values
+home = Path(os.environ.get("HERMES_HOME", "/home/hermeswebui/.hermes"))
+assert "API_SERVER_KEY" not in dotenv_values(home / ".env"), "Dashboard regenerated a PVC API key"
+print("Agent + dashboard persisted-home restart + reconciled gateway authentication OK")
 '
     exit 0
   fi
