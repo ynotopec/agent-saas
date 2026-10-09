@@ -1,0 +1,31 @@
+{{- $r := .Values.release -}}
+{{- $agent := printf "%s@%s" .Values.agentImage.repository .Values.agentImage.digest -}}
+{{- $webui := printf "%s@%s" .Values.image.repository .Values.image.digest -}}
+{{- if or (not $r.agent) (not $r.webui) -}}
+{{- fail "Fixed image metadata is required; export it with hermes-release.py helm-values" -}}
+{{- end -}}
+{{- if or (ne $agent $r.agent.image) (ne $webui $r.webui.image) -}}
+{{- fail "Image digests differ from the fixed release manifest" -}}
+{{- end -}}
+{{- range $image := list $agent $webui -}}
+{{- if not (regexMatch "^[^[:space:]]+@sha256:[0-9a-f]{64}$" $image) -}}
+{{- fail "Both official images must be pinned by digest" -}}
+{{- end -}}
+{{- end -}}
+{{- if or (ne .Values.agentImage.repository "nousresearch/hermes-agent") (ne .Values.image.repository "ghcr.io/nesquena/hermes-webui") -}}
+{{- fail "Use the official image repositories" -}}
+{{- end -}}
+{{- if not (regexMatch "^[0-9]+$" (toString .Values.releaseDelayDays)) -}}
+{{- fail "releaseDelayDays must be a non-negative integer" -}}
+{{- end -}}
+{{- $format := "2006-01-02T15:04:05Z07:00" -}}
+{{- $current := unixEpoch now | int64 -}}
+{{- range $image := list $r.agent $r.webui -}}
+{{- if has $image.tag (list "latest" "stable" "main" "experimental") -}}
+{{- fail "Release tags must be fixed versions" -}}
+{{- end -}}
+{{- $published := unixEpoch (mustToDate $format $image.published_at) | int64 -}}
+{{- if lt (sub $current $published) (mul (int64 $.Values.releaseDelayDays) 86400) -}}
+{{- fail "Image is younger than the configured release delay" -}}
+{{- end -}}
+{{- end -}}

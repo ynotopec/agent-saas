@@ -108,7 +108,7 @@ data:
       extract_backend: trafilatura
 EOF
 
-# Render the deployment and runtime ConfigMap using the shared contract.
+# Render the deployment using the shared contract.
 python3 "$SCRIPT_DIR/scripts/render-hermes-deployment.py" "$NAME" "$NAMESPACE" "$SUBDOMAIN" "$HASH" |
   kubectl --kubeconfig="${KUBECONFIG}" apply -f -
 

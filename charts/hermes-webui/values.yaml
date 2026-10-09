@@ -1,17 +1,36 @@
-# Runtime repair is enabled by default. Set both image digests before install/upgrade.
-runtime:
-  enabled: true
-  pythonVersion: "3.14.7"
+# Export this object with: python3 scripts/hermes-release.py helm-values
+# Fixed official images at least releaseDelayDays old; updates require canary validation.
+release:
+  schema_version: 1
+  selection_date: '2026-10-09'
+  cutoff: '2026-10-02T14:05:16Z'
+  agent:
+    tag: v2026.9.24
+    image: nousresearch/hermes-agent@sha256:fca358f12efd65bfaaca05884166f15c0e2788375ca30d77061ac1ebc96452b7
+    published_at: '2026-09-24T10:18:09Z'
+    source_revision: f97608f178d1ffeca59860195ab7da295f7c8e5f
+    architectures:
+    - amd64
+    - arm64
+  webui:
+    tag: 0.52.404
+    image: ghcr.io/nesquena/hermes-webui@sha256:005718b9dc5249f385ab30ccf968b00830791ea59379d26210cde085075f94a5
+    published_at: '2026-10-02T12:54:24Z'
+    source_revision: 62e4d7b9e2560f9d49c0c29c2dc1414fbd4e2d12
+    python: 3.12.15
+    architectures:
+    - amd64
+    - arm64
+releaseDelayDays: 7
 agentImage:
   repository: nousresearch/hermes-agent
-  digest: ""
+  digest: sha256:fca358f12efd65bfaaca05884166f15c0e2788375ca30d77061ac1ebc96452b7
 
 replicaCount: 1
 
 image:
   repository: ghcr.io/nesquena/hermes-webui
-  digest: ""
-  tag: 0.51.185
+  digest: sha256:005718b9dc5249f385ab30ccf968b00830791ea59379d26210cde085075f94a5
   pullPolicy: IfNotPresent
 
 nameOverride: ""
@@ -26,7 +45,7 @@ podAnnotations: {}
 podLabels: {}
 
 podSecurityContext:
-  fsGroup: 1024
+  fsGroup: 1000
   fsGroupChangePolicy: OnRootMismatch
 
 # Le conteneur officiel démarre en root pour préparer les volumes puis baisse ses privilèges.

@@ -16,10 +16,8 @@ AUTH_HEADERS = {"X-Deploy-Token": "test-deploy-token"}
 
 
 @pytest.fixture
-def client(monkeypatch):
+def client(monkeypatch, release):
     """Test client with test config."""
-    monkeypatch.setenv("HERMES_AGENT_IMAGE", "nousresearch/hermes-agent@sha256:" + "a" * 64)
-    monkeypatch.setenv("HERMES_WEBUI_IMAGE", "ghcr.io/nesquena/hermes-webui@sha256:" + "b" * 64)
     monkeypatch.setattr(app_module, "DEPLOY_TOKEN", "test-deploy-token")
     monkeypatch.setattr(app_module, "HERMES_WEBUI_PASSWORD", "test-webui-password")
     monkeypatch.setattr(app_module, "API_SERVER_KEY", "test-api-server-key")

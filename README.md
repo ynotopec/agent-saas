@@ -1,6 +1,6 @@
 # Agents SaaS — Deploy from Zero
 
-**Runtime Hermes :** configurez le couple d'images par digest avant l'installation.
+**Runtime Hermes :** images officielles fixes, publiées depuis au moins sept jours.
 Voir [la procédure de correction et migration](docs/hermes-runtime-repair.md)
 pour les instances existantes, futures et les releases Helm.
 
@@ -39,9 +39,13 @@ kubectl -n demo1 create secret generic agents-saas-secrets \
   --from-literal=API_SERVER_KEY='<random-api-server-key>' \
   --from-literal=DEPLOY_TOKEN='<random-dashboard-token>' \
   --from-literal=HERMES_WEBUI_PASSWORD='<initial-instance-password>'
+kubectl -n demo1 create configmap agents-saas-release \
+  --from-file=hermes-images.json=releases/hermes-images.json \
+  --dry-run=client -o yaml | kubectl apply -f -
 kubectl create configmap agents-saas-app \
   --from-file=app.py=app.py \
   --from-file=hermes_runtime.py=hermes_runtime.py \
+  --from-file=release_policy.py=release_policy.py \
   --dry-run=client -o yaml | kubectl apply -f - -n demo1
 kubectl apply -f manifests/03-deployment.yaml -n demo1
 kubectl apply -f manifests/04-service.yaml -n demo1

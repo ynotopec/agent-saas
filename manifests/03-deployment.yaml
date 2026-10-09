@@ -23,22 +23,10 @@ spec:
         ports:
         - containerPort: 8000
         env:
-        # Set the two @sha256 references in agents-saas-runtime before deployment.
-        - name: HERMES_AGENT_IMAGE
-          valueFrom:
-            configMapKeyRef:
-              name: agents-saas-runtime
-              key: HERMES_AGENT_IMAGE
-        - name: HERMES_WEBUI_IMAGE
-          valueFrom:
-            configMapKeyRef:
-              name: agents-saas-runtime
-              key: HERMES_WEBUI_IMAGE
-        - name: HERMES_WEBUI_PYTHON
-          valueFrom:
-            configMapKeyRef:
-              name: agents-saas-runtime
-              key: HERMES_WEBUI_PYTHON
+        - name: HERMES_RELEASE_FILE
+          value: /etc/hermes-release/hermes-images.json
+        - name: HERMES_RELEASE_DELAY_DAYS
+          value: "7"
         - name: DEPLOY_TOKEN
           valueFrom:
             secretKeyRef:
@@ -84,6 +72,9 @@ spec:
           initialDelaySeconds: 5
           periodSeconds: 30
         volumeMounts:
+        - name: hermes-release
+          mountPath: /etc/hermes-release
+          readOnly: true
         - name: app-files
           mountPath: /app
         - name: pip-packages
@@ -101,3 +92,6 @@ spec:
           name: agents-saas-app
       - name: pip-packages
         emptyDir: {}
+      - name: hermes-release
+        configMap:
+          name: agents-saas-release

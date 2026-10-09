@@ -1,178 +1,178 @@
-# Corriger le runtime Hermes des instances existantes et futures
+# Hermes : versions fixes et déploiement proche du Compose officiel
 
-## Pourquoi `pip install python-dotenv` ne suffit pas
+## Couple retenu le 9 octobre 2026
 
-La WebUI officielle utilise une image de base Python 3.12. Les sources récentes
-de Hermes Agent conditionnent leurs dépendances principales à Python >= 3.14.
-L'installation du package peut donc réussir sous 3.12 sans installer `dotenv`,
-alors que `from run_agent import AIAgent` échoue. L'acceptation de Python >= 3.11
-dans les métadonnées de l'agent sert à la migration de l'ancien updater, pas à
-définir un runtime d'exécution supporté.
+La sélection utilise un seuil de sept jours : aucune image publiée après le
+**2 octobre 2026 à 14:05 UTC**. Les registres proposent les versions suivantes :
 
-Le contrat de ce dépôt utilise Python **3.14.7** (configurable par version patch
-exacte), un couple d'images figé par digest, et vérifie l'import d'`AIAgent`
-avant le démarrage du serveur. Une image WebUI dont le script de démarrage ne
-correspond plus au contrat attendu échoue explicitement. Les scripts du runtime
-sont versionnés dans un ConfigMap immutable pour conserver la possibilité de
-revenir au template précédent.
+| Composant | Version | Publication de l'image | Digest multiarchitecture |
+|---|---|---|---|
+| Agent | `v2026.9.24` | 24 septembre | `sha256:fca358f12efd65bfaaca05884166f15c0e2788375ca30d77061ac1ebc96452b7` |
+| WebUI | `0.52.404` | 2 octobre | `sha256:005718b9dc5249f385ab30ccf968b00830791ea59379d26210cde085075f94a5` |
 
-## 1. Choisir et vérifier le couple d'images
+Il n'existe pas d'image Agent versionnée publiée exactement le 2 octobre dans
+la liste du registre : le 24 septembre est la dernière disponible avant le seuil.
+Le fichier [hermes-images.json](../releases/hermes-images.json) conserve les
+révisions des sources, dates et architectures AMD64/ARM64. Les tags servent à
+identifier les versions ; les Deployments utilisent exclusivement les digests.
+La release WebUI correspond à `exp-v0.52.404` en amont : ce canal est expérimental,
+même si son image porte le tag numérique fixe `0.52.404`.
 
-Choisissez des versions Agent/WebUI compatibles. Un digest fixe une image ; il
-ne prouve pas à lui seul que deux images sont compatibles.
+Le `pyproject.toml` de la révision Agent `f97608f178d1ffeca59860195ab7da295f7c8e5f`
+déclare `>=3.11,<3.14`, et les dépendances `python-dotenv`/`psutil` ne sont pas
+conditionnées à Python 3.14. Le WebUI de la révision
+`62e4d7b9e2560f9d49c0c29c2dc1414fbd4e2d12` utilise Python **3.12.15**.
+Cette compatibilité déclarée doit être complétée par les tests des images et
+un essai réel sur une instance avant généralisation.
 
-Avec Docker, récupérez les références après avoir téléchargé les versions choisies :
+Les images `latest` reproduites le 9 octobre échouaient aussi avec le Compose
+officiel : `AIAgent` ne pouvait pas importer `dotenv`. Les dépendances du nouvel
+Agent étaient conditionnées à Python >=3.14, alors que le WebUI utilisait 3.12.
+Un défaut de droits sur `tools/.install.lock` bloquait également la copie Docker.
+
+## Ce qui reste conforme au Compose
+
+- Images officielles, entrypoints officiels et commande `gateway run`.
+- Le WebUI conserve son Python et son installation native des dépendances.
+  Aucun patch du script upstream, téléchargement forcé de Python ou venv partagé.
+- Home, configuration, historique et workspace persistent sur leurs PVC.
+- Les sources Agent sont séparées du home et montées en lecture seule côté WebUI.
+- `API_SERVER_KEY` est transmis au WebUI comme `HERMES_WEBUI_GATEWAY_API_KEY`.
+- Le mot de passe utilise `HERMES_WEBUI_PASSWORD`, selon l'authentification native.
+
+Adaptations Kubernetes : un initContainer copie les sources depuis l'image
+Agent dans un `emptyDir` neuf à chaque Pod, au lieu d'initialiser un volume Docker.
+La copie inclut les dotfiles, exclut les venvs, caches, métadonnées de build et le
+verrou transitoire `.install.lock`; elle attribue les sources à `1000:1000` et
+retire les permissions d'écriture groupe/autres. Le WebUI reste démarré par
+l'entrypoint officiel, qui copie ces sources dans son répertoire de build.
+
+Les sondes vérifient l'import de `AIAgent` **sans ajout manuel à sys.path**, puis
+`/health`. Un serveur HTTP sans Agent fonctionnel ne devient donc pas Ready.
+La sonde de démarrage dispose d'environ 20 minutes; le Deployment a un délai
+minimal de progression de 30 minutes. Le premier démarrage dépend encore de
+l'accès aux registres et dépôts de paquets, comme le Compose officiel.
+
+## Délai configurable et mises à jour
 
 ```bash
-docker pull nousresearch/hermes-agent:<version-agent>
-docker pull ghcr.io/nesquena/hermes-webui:<version-webui>
-docker image inspect --format '{{index .RepoDigests 0}}' nousresearch/hermes-agent:<version-agent>
-docker image inspect --format '{{index .RepoDigests 0}}' ghcr.io/nesquena/hermes-webui:<version-webui>
+python3 scripts/hermes-release.py check
+HERMES_RELEASE_DELAY_DAYS=14 python3 scripts/hermes-release.py check
 ```
 
-Remplacez les valeurs ci-dessous par les références complètes retournées :
+Le défaut est sept jours depuis la publication de chaque image, pas sept jours
+supplémentaires depuis son téléchargement. Les dates du fichier proviennent des
+registres; ne les modifier que lors d'une nouvelle sélection vérifiée.
+`HERMES_RELEASE_FILE` peut désigner un autre manifeste de versions fixes.
+Dans Helm, le paramètre correspondant est `releaseDelayDays`.
+
+Il n'y a **aucune mise à jour automatique** et aucun fallback vers `latest`.
+Les Pods redémarrés réutilisent les mêmes digests. Augmenter le délai ne change
+pas les Pods existants; cela peut empêcher une création/migration utilisant une
+image trop récente pour la nouvelle politique.
+
+Pour une mise à jour : sélectionner les deux images publiées avant le nouveau
+seuil, relever leurs digests et révisions, vérifier les déclarations Python,
+mettre à jour le manifeste et les valeurs Helm, puis exécuter la CI et un canary.
+Si le canary échoue, conserver le dernier couple validé; sept jours ne constituent
+pas une garantie de correction upstream.
+
+## Vérifier les images
+
+La CI exécute `scripts/test-hermes-images.sh` sur runners AMD64 et ARM64. Ce test
+utilise les images officielles et leurs entrypoints intacts, monte des répertoires
+isolés, ne publie aucun port, vérifie `AIAgent`, `/health`, l'exécution d'un shell
+et la connexion au gateway. Il ne réalise pas d'appel payant à un LLM.
 
 ```bash
-export HERMES_AGENT_IMAGE='nousresearch/hermes-agent@sha256:<digest-agent>'
-export HERMES_WEBUI_IMAGE='ghcr.io/nesquena/hermes-webui@sha256:<digest-webui>'
-export HERMES_WEBUI_PYTHON='3.14.7'
+bash scripts/test-hermes-images.sh
 ```
 
-Les commandes refusent une référence vide, un tag seul ou `latest` avant toute
-création de ressources. La WebUI conserve son installation de dépendances par
-l'entrypoint officiel, mais crée son venv avec la version Python explicite.
-Le premier démarrage nécessite l'accès aux téléchargements Python de `uv`, aux
-registres des dépendances et, selon les extras, à GitHub. Pour un environnement
-sans Internet, préparez une image dérivée et ses caches avant le déploiement.
+La présence des images et leur compatibilité déclarée ont été vérifiées pendant
+la préparation de cette PR. Le conteneur de travail ne possède ni Docker ni accès
+au cluster : les tests des images doivent passer en CI, puis un chat réel doit
+être vérifié sur le canary ARM64 avant de migrer toutes les instances.
 
-Le workflow GitHub **Hermes runtime regression checks** peut être lancé
-manuellement avec les deux digests. Il démarre un vrai conteneur WebUI, vérifie
-le Python du venv, l'import d'`AIAgent` et `/health`. Ce smoke test est AMD64 ;
-faites également un canari sur le cluster ARM64 avant de migrer toutes les instances.
+## Mettre à jour le SaaS
 
-## 2. Configurer les futures instances créées par le SaaS
+Depuis la racine du dépôt, avec le bon contexte kubectl :
 
 ```bash
-kubectl -n demo1 create configmap agents-saas-runtime \
-  --from-literal=HERMES_AGENT_IMAGE="$HERMES_AGENT_IMAGE" \
-  --from-literal=HERMES_WEBUI_IMAGE="$HERMES_WEBUI_IMAGE" \
-  --from-literal=HERMES_WEBUI_PYTHON="$HERMES_WEBUI_PYTHON" \
+kubectl -n demo1 create configmap agents-saas-release \
+  --from-file=hermes-images.json=releases/hermes-images.json \
   --dry-run=client -o yaml | kubectl apply -f -
 
-kubectl apply -f manifests/01-rbac.yaml
 kubectl -n demo1 create configmap agents-saas-app \
   --from-file=app.py=app.py \
   --from-file=hermes_runtime.py=hermes_runtime.py \
+  --from-file=release_policy.py=release_policy.py \
   --dry-run=client -o yaml | kubectl apply -f -
+kubectl apply -f manifests/01-rbac.yaml
 kubectl apply -f manifests/03-deployment.yaml
 kubectl -n demo1 rollout restart deployment/agents-saas
 kubectl -n demo1 rollout status deployment/agents-saas --timeout=180s
 ```
 
-Le Secret `agents-saas-secrets` doit déjà contenir `DEPLOY_TOKEN`,
-`HERMES_WEBUI_PASSWORD`, `API_SERVER_KEY` (au moins 16 caractères) et `LLM_API_KEY`.
-Chaque nouvelle instance reçoit son Secret de runtime et son ConfigMap de scripts.
-Le ServiceAccount du SaaS peut créer ces Secrets, mais n'obtient pas de nouveaux
-droits pour lire les Secrets du namespace. Les pods Hermes ne montent aucun token
-Kubernetes.
+Le SaaS monte le manifeste à `/etc/hermes-release/hermes-images.json`; changer
+le ConfigMap ne migre pas les instances déjà créées. Les prochains déploiements
+utilisent le même contrat que le script autonome et Helm.
 
-`deploy-agent.sh` utilise le même générateur que `app.py` : exportez les variables
-de runtime et les credentials habituels, puis lancez le script depuis le dépôt.
-
-## 3. Migrer les Deployments existants
-
-Le script cible les Deployments portant le label `app=agent-instance`. Il ne
-supprime aucun PVC et ne modifie pas les sessions, la configuration utilisateur,
-le workspace ni les références aux PVC. Il conserve les sidecars supplémentaires,
-les ressources et le placement du pod. Les anciennes sources présentes dans le
-PVC restent sur disque, mais sont masquées par un `emptyDir` dédié et monté en
-lecture seule côté WebUI.
-
-Commencez par le plan, sans modification du cluster :
+## Réparer une instance existante, puis les autres
 
 ```bash
-python3 scripts/repair-existing-hermes.py demo1
-```
+# Lecture seule : vérifier la sélection et les ressources cibles.
+python3 scripts/repair-existing-hermes.py demo1 \
+  --deployment agent-081d366d-abigot-agent
 
-Puis choisissez une instance canari :
-
-```bash
+# Correction ciblée. Le rollout reste visible, sans attente silencieuse.
 python3 scripts/repair-existing-hermes.py demo1 \
   --deployment agent-081d366d-abigot-agent --apply
+
+python3 scripts/hermes-release.py validate --namespace demo1 \
+  --deployment agent-081d366d-abigot-agent
 ```
 
-Après validation du chat et des outils sur ce canari :
+Vérifier ensuite une conversation, un outil et l'accès au workspace dans le
+navigateur. Quand le canary est validé :
 
 ```bash
 python3 scripts/repair-existing-hermes.py demo1 --apply
 ```
 
-Avant la première modification, le script valide tous les targets et sauvegarde
-les Deployments dans `hermes-runtime-backups/<date>/` (dossier 0700, fichiers
-0600, exclus de Git). **Ces sauvegardes peuvent contenir des credentials**.
-Il applique ensuite les migrations une à une, avec une garde `resourceVersion`
-contre une modification concurrente. Un rollout échoué restaure le template
-précédent de l'instance concernée puis arrête la migration ; les autres instances
-ne sont pas modifiées. Les instances déjà migrées avec succès restent migrées.
+La migration conserve les PVC, ressources, placement, sidecars et secrets.
+Elle retire les anciens overrides Python et le `password-seed`; si ce dernier
+contenait le seul mot de passe explicite, sa valeur/source est transmise au
+WebUI natif. Elle ne supprime aucun ancien fichier du PVC.
 
-Le passage à `Recreate` entraîne une interruption par instance. Le budget du
-startup probe est de 20 minutes et celui du rollout de 25 minutes. L'import de
-l'agent et `/health` doivent réussir pour accepter du trafic.
+Chaque Deployment reçoit une sauvegarde privée (`0700` pour le dossier, `0600`
+pour les fichiers), un patch gardé par `resourceVersion` et une annotation de
+réparation unique pour déclencher un nouveau rollout. Le script applique les
+changements séquentiellement et restaure le template et le délai précédents
+sur la première erreur, puis s'arrête. Les sauvegardes peuvent contenir des
+secrets; elles sont exclues de Git. La stratégie `Recreate` interrompt brièvement
+l'instance; la sauvegarde du Deployment ne remplace pas une sauvegarde du PVC.
 
-La migration conserve les réglages canoniques existants. Elle ne recopie pas le
-hash de l'ancien seed `.hermes/webui/settings.json` : ce hash utilisait un format
-et un salt différents de l'authentification upstream actuelle. Si une ancienne
-instance ne possède aucun mot de passe valide, définissez-en un via l'API
-`/api/change-password` protégée par `DEPLOY_TOKEN` après la migration. Le mot de
-passe géré par le SaaS est ensuite porté par un Secret, transmis à la WebUI et
-hashé par son implémentation native ; il a priorité sur le mot de passe des
-Settings. Les autres réglages ne sont pas modifiés. Un échec du patch de rollout
-est remonté au client au lieu d'être ignoré.
+## Helm
 
-## 4. Helm : installations et releases existantes
-
-Le chart est un déploiement WebUI autonome, pas une stack gateway à trois
-conteneurs. Son runtime corrigé est activé par défaut et nécessite les deux
-digests :
-
-```yaml
-image:
-  repository: ghcr.io/nesquena/hermes-webui
-  digest: sha256:<digest-webui>
-agentImage:
-  repository: nousresearch/hermes-agent
-  digest: sha256:<digest-agent>
-runtime:
-  enabled: true
-  pythonVersion: "3.14.7"
-```
-
-Pour une release existante, faites `helm upgrade` avec les values et références
-aux PVC de cette release, après sauvegarde des values et du manifeste :
+Le chart inclut les mêmes pins et scripts de copie/sonde. Il refuse une image
+mutable, un digest différent du manifeste ou une image trop récente.
+Pour synchroniser les valeurs avec un manifeste personnalisé :
 
 ```bash
-helm get values <release> -n <namespace> -a > values-before.yaml
-helm get manifest <release> -n <namespace> > manifest-before.yaml
-helm upgrade <release> charts/hermes-webui -n <namespace> \
-  -f <values-de-la-release> -f <values-runtime> --atomic --timeout 25m
+python3 scripts/hermes-release.py helm-values > /tmp/hermes-pins.json
+helm upgrade --install hermes charts/hermes-webui -n demo1 \
+  -f /tmp/hermes-pins.json -f /path/to/instance-values.yaml \
+  --wait --timeout 35m
 ```
 
-Protégez ces sauvegardes : elles peuvent contenir des secrets. Le script de
-migration des Deployments SaaS refuse le chart autonome ; utilisez Helm pour
-préserver l'identité et l'historique de la release. `runtime.enabled=false`
-conserve le comportement historique pour un rollback explicite, sans protection
-contre l'incompatibilité Python.
+Migrer les releases Helm avec Helm, pas avec le script réservé aux Deployments
+`app=agent-instance`. Conserver les `existingClaim` actuels. Pour revenir à la
+révision précédente : `helm rollback hermes <revision> -n demo1 --wait --timeout 35m`.
 
-## Validation locale
+## Références officielles
 
-```bash
-pip install pytest fastapi httpx pyyaml argon2-cffi trafilatura
-python3 -m pytest -q
-bash -n deploy-agent.sh
-```
-
-Installez Helm pour exécuter également les tests de rendu du chart. Les tests
-couvrent la préservation des PVC/configs/settings, la migration idempotente,
-l'arrêt et la restauration après échec, les digests obligatoires, les mauvaises
-versions Python, les imports d'agent manquants, le rendu Helm et la synchronisation
-des scripts embarqués.
+- [Compose à deux conteneurs](https://github.com/nesquena/hermes-webui/blob/62e4d7b9e2560f9d49c0c29c2dc1414fbd4e2d12/docker-compose.two-container.yml)
+- [Entrypoint WebUI sélectionné](https://github.com/nesquena/hermes-webui/blob/62e4d7b9e2560f9d49c0c29c2dc1414fbd4e2d12/docker_init.bash)
+- [Dépendances Agent sélectionné](https://github.com/NousResearch/hermes-agent/blob/f97608f178d1ffeca59860195ab7da295f7c8e5f/pyproject.toml)
+- [Politique de compatibilité](https://github.com/nesquena/hermes-webui/blob/master/docs/docker.md#compatibility-policy-and-version-pinning)
+- [Signalement Docker similaire #8036](https://github.com/nesquena/hermes-webui/issues/8036)

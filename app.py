@@ -9,7 +9,7 @@ from datetime import datetime
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
-from hermes_runtime import render_deployment, runtime_configmap, runtime_settings
+from hermes_runtime import render_deployment, runtime_settings
 
 class DeployRequest(BaseModel):
     subdomain: str
@@ -212,7 +212,6 @@ def deploy_instance(subdomain: str) -> dict:
             "type": "Opaque",
             "stringData": {"password": HERMES_WEBUI_PASSWORD, "API_SERVER_KEY": API_SERVER_KEY},
         })
-        k8s_post("configmaps", runtime_configmap(name, NAMESPACE))
         config = build_config()
 
         # Data PVC: 20Gi, Workspace PVC: 5Gi
@@ -240,7 +239,7 @@ def deploy_instance(subdomain: str) -> dict:
             name, NAMESPACE, subdomain, hash8, secret_name=f"{name}-runtime-secrets",
             llm_env={"LLM_BASE_URL": LLM_BASE_URL, "LLM_API_KEY": LLM_API_KEY,
                      "LLM_PROVIDER": LLM_PROVIDER, "LLM_MODEL": LLM_MODEL},
-        )["items"][1]
+        )["items"][0]
         k8s_post("deployments", deployment_body)
 
         k8s_post("services", {

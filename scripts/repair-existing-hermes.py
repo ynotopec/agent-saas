@@ -10,16 +10,17 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
-from hermes_runtime import repair_pod_spec, runtime_configmap, runtime_settings
+from hermes_runtime import repair_pod_spec, runtime_settings
 
 
-def plan(deployment):
+def plan(deployment, images=None):
     """Produce a guarded merge patch without altering the source object."""
     name = deployment["metadata"]["name"]
     template = json.loads(json.dumps(deployment["spec"]["template"]))
-    template["spec"] = repair_pod_spec(template["spec"], name)
+    template["spec"] = repair_pod_spec(template["spec"], name, images=images)
     return {"metadata": {"resourceVersion": deployment["metadata"]["resourceVersion"]},
-            "spec": {"strategy": {"type": "Recreate", "rollingUpdate": None}, "template": template}}
+            "spec": {"progressDeadlineSeconds": max(1800, deployment["spec"].get("progressDeadlineSeconds", 600)),
+                     "strategy": {"type": "Recreate", "rollingUpdate": None}, "template": template}}
 
 
 def private_json(path, value):
@@ -34,9 +35,9 @@ def main(argv=None):
     parser.add_argument("--deployment", action="append", help="Canary deployment name; repeat to select instances")
     parser.add_argument("--apply", action="store_true", help="Apply the plan (default is read-only)")
     parser.add_argument("--backup-dir", default="hermes-runtime-backups/" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
-    parser.add_argument("--timeout", default="25m")
+    parser.add_argument("--timeout", default="35m")
     args = parser.parse_args(argv)
-    runtime_settings()
+    images = runtime_settings()
     base = ["kubectl", "-n", args.namespace]
 
     def kubectl(*command, input=None):
@@ -52,12 +53,14 @@ def main(argv=None):
             raise ValueError("Unknown agent-instance deployments: " + ", ".join(sorted(missing)))
     # Validate every target before the first mutation. Never apply a partial plan
     # because a later deployment had an unsupported layout or missing API key.
-    plans = [(d, plan(d)) for d in sorted(deployments, key=lambda d: d["metadata"]["name"])]
+    plans = [(d, plan(d, images)) for d in sorted(deployments, key=lambda d: d["metadata"]["name"])]
     for deployment, _ in plans:
         print(("Migrate" if args.apply else "Plan") + ": " + deployment["metadata"]["name"], flush=True)
     if not args.apply or not plans:
         print("No changes applied." if not args.apply else "No matching deployments.")
         return
+    for _, patch in plans:
+        patch["spec"]["template"].setdefault("metadata", {}).setdefault("annotations", {})["agent-saas/runtime-repair-at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
     backup_dir = pathlib.Path(args.backup_dir)
     backup_dir.mkdir(mode=0o700, parents=True, exist_ok=False)
     for deployment, patch in plans:
@@ -67,20 +70,17 @@ def main(argv=None):
     print("Deployment backups: " + str(backup_dir), flush=True)
     for deployment, _ in plans:
         name = deployment["metadata"]["name"]
-        configmap = runtime_configmap(name, args.namespace)
-        # Immutable revisioned ConfigMaps keep rollout undo usable: a later
-        # runtime revision cannot overwrite the previous revision's scripts.
-        kubectl("apply", "-f", "-", input=json.dumps(configmap))
         kubectl("patch", "deployment", name, "--type=merge", "--patch-file",
                 str(backup_dir / (name + ".patch.json")))
         try:
-            kubectl("rollout", "status", "deployment/" + name, "--timeout=" + args.timeout)
+            subprocess.run(base + ["rollout", "status", "deployment/" + name, "--timeout=" + args.timeout], check=True)
         except subprocess.CalledProcessError:
             print("Rollout failed for " + name + "; restoring its previous template and stopping.", file=sys.stderr)
             current = json.loads(kubectl("get", "deployment", name, "-o", "json"))
             rollback = {"metadata": {"resourceVersion": current["metadata"]["resourceVersion"]},
                         "spec": {"template": deployment["spec"]["template"],
-                                 "strategy": dict(deployment["spec"].get("strategy", {}))}}
+                                 "strategy": dict(deployment["spec"].get("strategy", {})),
+                                 "progressDeadlineSeconds": deployment["spec"].get("progressDeadlineSeconds", 600)}}
             if rollback["spec"]["strategy"].get("type") == "Recreate":
                 rollback["spec"]["strategy"]["rollingUpdate"] = None
             with tempfile.TemporaryDirectory() as temp:

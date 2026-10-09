@@ -6,6 +6,7 @@ metadata:
     {{- include "hermes-webui.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount }}
+  progressDeadlineSeconds: 1800
   strategy:
     type: Recreate
   selector:
@@ -27,7 +28,6 @@ spec:
       automountServiceAccountToken: false
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
-      {{- if or .Values.runtime.enabled (and .Values.hermesConfig.seed.enabled .Values.persistentStorage.hermesHome.enabled) }}
       initContainers:
         {{- if and .Values.hermesConfig.seed.enabled .Values.persistentStorage.hermesHome.enabled }}
         - name: seed-hermes-config
@@ -56,9 +56,8 @@ spec:
               mountPath: /hermes-config
               readOnly: true
         {{- end }}
-        {{- if .Values.runtime.enabled }}
         - name: init-agent-src
-          image: {{ printf "%s@%s" .Values.agentImage.repository (required "agentImage.digest is required (sha256:...)" .Values.agentImage.digest) | quote }}
+          image: {{ printf "%s@%s" .Values.agentImage.repository .Values.agentImage.digest | quote }}
           imagePullPolicy: IfNotPresent
           command: ["sh", "-c"]
           args:
@@ -68,16 +67,9 @@ spec:
           volumeMounts:
             - name: hermes-agent-src
               mountPath: /agent-src
-        {{- end }}
-      {{- end }}
       containers:
         - name: hermes-webui
-          {{- if .Values.runtime.enabled }}
-          image: {{ printf "%s@%s" .Values.image.repository (required "image.digest is required (sha256:...)" .Values.image.digest) | quote }}
-          command: ["/bin/bash", "/runtime/start.sh"]
-          {{- else }}
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
-          {{- end }}
+          image: {{ printf "%s@%s" .Values.image.repository .Values.image.digest | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
@@ -86,20 +78,12 @@ spec:
               containerPort: {{ .Values.service.port }}
               protocol: TCP
           env:
-            {{- if .Values.runtime.enabled }}
-            - name: HERMES_WEBUI_PYTHON
-              value: {{ .Values.runtime.pythonVersion | quote }}
             - name: HERMES_WEBUI_AGENT_DIR
               value: /home/hermeswebui/.hermes/hermes-agent
-            - name: UV_PYTHON_INSTALL_DIR
-              value: /app/python
-            - name: UV_PYTHON_DOWNLOADS
-              value: automatic
-            {{- end }}
             - name: WANTED_UID
-              value: "1024"
+              value: "1000"
             - name: WANTED_GID
-              value: "1024"
+              value: "1000"
             {{- range $name, $value := .Values.env }}
             - name: {{ $name }}
               value: {{ $value | quote }}
@@ -116,14 +100,9 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           volumeMounts:
-            {{- if .Values.runtime.enabled }}
             - name: hermes-agent-src
               mountPath: /home/hermeswebui/.hermes/hermes-agent
               readOnly: true
-            - name: hermes-runtime
-              mountPath: /runtime
-              readOnly: true
-            {{- end }}
             {{- if .Values.persistentStorage.hermesHome.enabled }}
             - name: hermes-home
               mountPath: {{ .Values.persistentStorage.hermesHome.mountPath }}
@@ -132,34 +111,30 @@ spec:
             - name: workspace
               mountPath: {{ .Values.persistentStorage.workspace.mountPath }}
             {{- end }}
-          {{- if .Values.runtime.enabled }}
           startupProbe:
             exec:
-              command: ["/app/venv/bin/python", "/runtime/check.py", "--health"]
+              command:
+                - /app/venv/bin/python
+                - -c
+                - {{ .Files.Get "runtime/probe.py" | toJson }}
             periodSeconds: 10
             timeoutSeconds: 20
             failureThreshold: 120
-          readinessProbe:
-            exec:
-              command: ["/app/venv/bin/python", "/runtime/check.py", "--health"]
-            periodSeconds: 30
-            timeoutSeconds: 20
-          {{- else }}
-          readinessProbe:
-            {{- toYaml .Values.readinessProbe | nindent 12 }}
-          {{- end }}
           livenessProbe:
             {{- toYaml .Values.livenessProbe | nindent 12 }}
+          readinessProbe:
+            exec:
+              command:
+                - /app/venv/bin/python
+                - -c
+                - {{ .Files.Get "runtime/probe.py" | toJson }}
+            periodSeconds: 30
+            timeoutSeconds: 20
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
       volumes:
-        {{- if .Values.runtime.enabled }}
         - name: hermes-agent-src
           emptyDir: {}
-        - name: hermes-runtime
-          configMap:
-            name: {{ include "hermes-webui.fullname" . }}-runtime-v2
-        {{- end }}
         {{- if and .Values.hermesConfig.seed.enabled .Values.persistentStorage.hermesHome.enabled }}
         - name: hermes-config-seed
           secret:

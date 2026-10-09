@@ -1,6 +1,6 @@
 # Installation complète d'Agents SaaS
 
-**Runtime Hermes :** configurez le couple d'images par digest avant l'installation.
+**Runtime Hermes :** images officielles fixes, publiées depuis au moins sept jours.
 Voir [la procédure de correction et migration](docs/hermes-runtime-repair.md)
 pour les instances existantes, futures et les releases Helm.
 
@@ -33,14 +33,17 @@ Générez des valeurs aléatoires longues pour `API_SERVER_KEY`, `DEPLOY_TOKEN` 
 
 ## 2. Installer les ressources
 
-Créez d’abord le ConfigMap `agents-saas-runtime` décrit dans la procédure de
-correction ci-dessus ; le Deployment du SaaS en lit les trois variables de runtime.
+Le ConfigMap `agents-saas-release` fournit le couple fixe documenté dans la procédure ci-dessus.
 
 ```bash
 kubectl apply -f manifests/01-rbac.yaml
+kubectl -n demo1 create configmap agents-saas-release \
+  --from-file=hermes-images.json=releases/hermes-images.json \
+  --dry-run=client -o yaml | kubectl apply -f -
 kubectl create configmap agents-saas-app \
   --from-file=app.py=app.py \
   --from-file=hermes_runtime.py=hermes_runtime.py \
+  --from-file=release_policy.py=release_policy.py \
   --dry-run=client -o yaml | kubectl apply -f - -n demo1
 kubectl apply -f manifests/03-deployment.yaml
 kubectl apply -f manifests/04-service.yaml
@@ -84,6 +87,7 @@ Après une modification de `app.py`, recréez le ConfigMap puis redémarrez le D
 kubectl create configmap agents-saas-app \
   --from-file=app.py=app.py \
   --from-file=hermes_runtime.py=hermes_runtime.py \
+  --from-file=release_policy.py=release_policy.py \
   --dry-run=client -o yaml | kubectl apply -f - -n demo1
 kubectl -n demo1 rollout restart deployment/agents-saas
 kubectl -n demo1 rollout status deployment/agents-saas --timeout=180s
