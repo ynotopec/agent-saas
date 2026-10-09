@@ -1,7 +1,16 @@
+# Runtime repair is enabled by default. Set both image digests before install/upgrade.
+runtime:
+  enabled: true
+  pythonVersion: "3.14.7"
+agentImage:
+  repository: nousresearch/hermes-agent
+  digest: ""
+
 replicaCount: 1
 
 image:
   repository: ghcr.io/nesquena/hermes-webui
+  digest: ""
   tag: 0.51.185
   pullPolicy: IfNotPresent
 

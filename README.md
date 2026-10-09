@@ -1,5 +1,9 @@
 # Agents SaaS — Deploy from Zero
 
+**Runtime Hermes :** configurez le couple d'images par digest avant l'installation.
+Voir [la procédure de correction et migration](docs/hermes-runtime-repair.md)
+pour les instances existantes, futures et les releases Helm.
+
 Dashboard FastAPI pour gérer des instances Hermes sur Kubernetes. Crée, liste et gère des agents avec interface WebUI, sans Helm ni manifests statiques.
 
 ## Architecture
@@ -37,6 +41,7 @@ kubectl -n demo1 create secret generic agents-saas-secrets \
   --from-literal=HERMES_WEBUI_PASSWORD='<initial-instance-password>'
 kubectl create configmap agents-saas-app \
   --from-file=app.py=app.py \
+  --from-file=hermes_runtime.py=hermes_runtime.py \
   --dry-run=client -o yaml | kubectl apply -f - -n demo1
 kubectl apply -f manifests/03-deployment.yaml -n demo1
 kubectl apply -f manifests/04-service.yaml -n demo1

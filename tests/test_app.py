@@ -18,6 +18,8 @@ AUTH_HEADERS = {"X-Deploy-Token": "test-deploy-token"}
 @pytest.fixture
 def client(monkeypatch):
     """Test client with test config."""
+    monkeypatch.setenv("HERMES_AGENT_IMAGE", "nousresearch/hermes-agent@sha256:" + "a" * 64)
+    monkeypatch.setenv("HERMES_WEBUI_IMAGE", "ghcr.io/nesquena/hermes-webui@sha256:" + "b" * 64)
     monkeypatch.setattr(app_module, "DEPLOY_TOKEN", "test-deploy-token")
     monkeypatch.setattr(app_module, "HERMES_WEBUI_PASSWORD", "test-webui-password")
     monkeypatch.setattr(app_module, "API_SERVER_KEY", "test-api-server-key")
@@ -158,13 +160,17 @@ class TestConfigGeneration:
 class TestChangePasswordEndpoint:
     """Tests for the POST /api/change-password endpoint."""
 
+    @patch("app.k8s_patch")
     @patch("app.k8s_get")
     @patch("app.k8s_post")
-    def test_change_password_creates_job(self, mock_k8s_post, mock_k8s_get, client):
+    def test_change_password_creates_secret(self, mock_k8s_post, mock_k8s_get, mock_patch, client):
         """POST /api/change-password should return success when called with valid data."""
-        mock_k8s_get.return_value = {
-            "items": [{"metadata": {"name": "agent-abc-test", "labels": {"app": "agent-instance"}}}]
-        }
+        mock_k8s_get.side_effect = [
+            {"items": [{"metadata": {"name": "agent-abc-test-12345-abcde", "labels": {"app": "agent-instance"}}}]},
+            {"metadata": {"resourceVersion": "42"}, "spec": {"template": {"spec": {
+                "containers": [{"name": "hermes-webui", "env": []}]
+            }}}},
+        ]
         response = client.post(
             "/api/change-password",
             headers=AUTH_HEADERS,
@@ -174,8 +180,25 @@ class TestChangePasswordEndpoint:
         data = response.json()
         assert data["success"] is True
         assert data["subdomain"] == "test"
-        password_pod = mock_k8s_post.call_args.args[1]
-        assert password_pod["spec"]["automountServiceAccountToken"] is False
+        password_secret = mock_k8s_post.call_args.args[1]
+        assert password_secret["kind"] == "Secret"
+        assert password_secret["stringData"]["password"] == "newsecret123"
+
+    @patch("app.k8s_patch", side_effect=RuntimeError("patch failed"))
+    @patch("app.k8s_get")
+    @patch("app.k8s_post")
+    def test_failed_password_rollout_is_not_reported_as_success(self, create, get, patch_deployment, client):
+        get.side_effect = [
+            {"items": [{"metadata": {"name": "agent-abc-test-12345-abcde"}}]},
+            {"spec": {"template": {"spec": {"containers": [{"name": "hermes-webui"}]}}}},
+        ]
+        response = client.post("/api/change-password", headers=AUTH_HEADERS,
+                               json={"subdomain": "test", "new_password": "newsecret123"})
+        assert response.status_code == 502
+
+    def test_password_change_requires_authentication(self, client):
+        response = client.post("/api/change-password", json={"subdomain": "test", "new_password": "newsecret123"})
+        assert response.status_code == 401
 
     @patch("app.k8s_post")
     def test_change_password_rejects_empty_password(self, mock_k8s_post, client):

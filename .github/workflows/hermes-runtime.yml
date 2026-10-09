@@ -1,0 +1,89 @@
+name: Hermes runtime regression checks
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      agent_image:
+        description: 'Agent image pinned with @sha256 (optional container smoke test)'
+        required: false
+      webui_image:
+        description: 'WebUI image pinned with @sha256 (optional container smoke test)'
+        required: false
+permissions:
+  contents: read
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install pytest fastapi httpx pyyaml argon2-cffi trafilatura
+      - name: Install Helm
+        run: |
+          curl -fsSLO https://get.helm.sh/helm-v3.19.0-linux-amd64.tar.gz
+          curl -fsSLO https://get.helm.sh/helm-v3.19.0-linux-amd64.tar.gz.sha256sum
+          sha256sum --check helm-v3.19.0-linux-amd64.tar.gz.sha256sum
+          tar -xzf helm-v3.19.0-linux-amd64.tar.gz
+          sudo install linux-amd64/helm /usr/local/bin/helm
+      - run: python -m pytest -q
+      - run: bash -n deploy-agent.sh
+  container-smoke:
+    if: github.event_name == 'workflow_dispatch' && inputs.agent_image != '' && inputs.webui_image != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      HERMES_AGENT_IMAGE: ${{ inputs.agent_image }}
+      HERMES_WEBUI_IMAGE: ${{ inputs.webui_image }}
+      HERMES_WEBUI_PYTHON: '3.14.7'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate inputs and materialize runtime scripts
+        run: |
+          python3 - <<'PY'
+          import pathlib
+          from hermes_runtime import runtime_settings, START_SCRIPT, CHECK_SCRIPT, COPY_SOURCE
+          runtime_settings()
+          for directory in ('smoke/runtime', 'smoke/source', 'smoke/home', 'smoke/workspace'):
+              pathlib.Path(directory).mkdir(parents=True, exist_ok=True)
+          for name, text in {'start.sh': START_SCRIPT, 'check.py': CHECK_SCRIPT,
+                             'copy-source.sh': COPY_SOURCE}.items():
+              pathlib.Path('smoke/runtime', name).write_text(text)
+          PY
+      - name: Copy the pinned Agent source into an empty directory
+        run: |
+          docker run --rm --entrypoint sh \
+            -v "$PWD/smoke/source:/agent-src" \
+            -v "$PWD/smoke/runtime:/runtime:ro" \
+            "$HERMES_AGENT_IMAGE" /runtime/copy-source.sh
+      - name: Start WebUI with the repaired runtime
+        run: |
+          docker run -d --name hermes-runtime-smoke \
+            --entrypoint /bin/bash \
+            -e HERMES_WEBUI_PYTHON -e HERMES_WEBUI_HOST=0.0.0.0 \
+            -e HERMES_WEBUI_PORT=8787 -e WANTED_UID=1000 -e WANTED_GID=1000 \
+            -e HERMES_WEBUI_STATE_DIR=/home/hermeswebui/.hermes/webui \
+            -e HERMES_WEBUI_AGENT_DIR=/home/hermeswebui/.hermes/hermes-agent \
+            -e UV_PYTHON_INSTALL_DIR=/app/python -e UV_PYTHON_DOWNLOADS=automatic \
+            -e HERMES_WEBUI_SKIP_ONBOARDING=1 \
+            -v "$PWD/smoke/source:/home/hermeswebui/.hermes/hermes-agent:ro" \
+            -v "$PWD/smoke/runtime:/runtime:ro" \
+            -v "$PWD/smoke/home:/home/hermeswebui/.hermes" \
+            -v "$PWD/smoke/workspace:/workspace" \
+            "$HERMES_WEBUI_IMAGE" /runtime/start.sh
+          for attempt in $(seq 1 120); do
+            if docker exec --user 1000 hermes-runtime-smoke /app/venv/bin/python /runtime/check.py --health; then
+              exit 0
+            fi
+            test "$(docker inspect -f '{{.State.Running}}' hermes-runtime-smoke)" = true || exit 1
+            sleep 10
+          done
+          exit 1
+      - name: Container logs
+        if: always()
+        run: docker logs hermes-runtime-smoke || true
+      - name: Cleanup
+        if: always()
+        run: docker rm -f hermes-runtime-smoke || true

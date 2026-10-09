@@ -1,0 +1,18 @@
+{{- if .Values.runtime.enabled }}
+{{- if not (regexMatch "^3\\.14\\.[0-9]+$" .Values.runtime.pythonVersion) }}
+{{- fail "runtime.pythonVersion must be an exact Python 3.14 patch version" }}
+{{- end }}
+{{- range $digest := list .Values.agentImage.digest .Values.image.digest }}
+{{- if not (regexMatch "^sha256:[0-9a-f]{64}$" $digest) }}
+{{- fail "agentImage.digest and image.digest must be immutable sha256 digests" }}
+{{- end }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "hermes-webui.fullname" . }}-runtime-v2
+immutable: true
+data:
+  start.sh: {{ .Files.Get "runtime/start.sh" | toJson }}
+  check.py: {{ .Files.Get "runtime/check.py" | toJson }}
+{{- end }}

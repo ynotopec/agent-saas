@@ -23,6 +23,27 @@ spec:
         ports:
         - containerPort: 8000
         env:
+        # Set the two @sha256 references in agents-saas-runtime before deployment.
+        - name: HERMES_AGENT_IMAGE
+          valueFrom:
+            configMapKeyRef:
+              name: agents-saas-runtime
+              key: HERMES_AGENT_IMAGE
+        - name: HERMES_WEBUI_IMAGE
+          valueFrom:
+            configMapKeyRef:
+              name: agents-saas-runtime
+              key: HERMES_WEBUI_IMAGE
+        - name: HERMES_WEBUI_PYTHON
+          valueFrom:
+            configMapKeyRef:
+              name: agents-saas-runtime
+              key: HERMES_WEBUI_PYTHON
+        - name: DEPLOY_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: agents-saas-secrets
+              key: DEPLOY_TOKEN
         - name: LLM_BASE_URL
           value: "https://api-nothink.ailab.infocepo.com/v1"
         - name: LLM_API_KEY

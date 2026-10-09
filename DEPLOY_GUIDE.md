@@ -1,5 +1,9 @@
 # Installation complète d'Agents SaaS
 
+**Runtime Hermes :** configurez le couple d'images par digest avant l'installation.
+Voir [la procédure de correction et migration](docs/hermes-runtime-repair.md)
+pour les instances existantes, futures et les releases Helm.
+
 Ce guide déploie le tableau de bord dans le namespace `demo1`. Le service crée ensuite les ressources de chaque instance dans ce même namespace.
 
 ## Prérequis
@@ -29,10 +33,14 @@ Générez des valeurs aléatoires longues pour `API_SERVER_KEY`, `DEPLOY_TOKEN` 
 
 ## 2. Installer les ressources
 
+Créez d’abord le ConfigMap `agents-saas-runtime` décrit dans la procédure de
+correction ci-dessus ; le Deployment du SaaS en lit les trois variables de runtime.
+
 ```bash
 kubectl apply -f manifests/01-rbac.yaml
 kubectl create configmap agents-saas-app \
   --from-file=app.py=app.py \
+  --from-file=hermes_runtime.py=hermes_runtime.py \
   --dry-run=client -o yaml | kubectl apply -f - -n demo1
 kubectl apply -f manifests/03-deployment.yaml
 kubectl apply -f manifests/04-service.yaml
@@ -75,6 +83,7 @@ Après une modification de `app.py`, recréez le ConfigMap puis redémarrez le D
 ```bash
 kubectl create configmap agents-saas-app \
   --from-file=app.py=app.py \
+  --from-file=hermes_runtime.py=hermes_runtime.py \
   --dry-run=client -o yaml | kubectl apply -f - -n demo1
 kubectl -n demo1 rollout restart deployment/agents-saas
 kubectl -n demo1 rollout status deployment/agents-saas --timeout=180s

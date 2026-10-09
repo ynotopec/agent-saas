@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Simple FastAPI server for agents-saas dashboard. Uses K8s REST API directly."""
 import os
-import hashlib
 import json
 import re
 import secrets
@@ -10,6 +9,7 @@ from datetime import datetime
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
+from hermes_runtime import render_deployment, runtime_configmap, runtime_settings
 
 class DeployRequest(BaseModel):
     subdomain: str
@@ -69,7 +69,7 @@ def _api_base(resource_type):
         "ingresses": "networking.k8s.io/v1",
         "certificates": "cert-manager.io/v1",
     }
-    version = api_map.get(resource_type, "v1")
+    version = api_map.get(resource_type.split("/", 1)[0], "v1")
     if version == "v1":
         return "https://kubernetes.default.svc/api/v1"
     parts = version.split("/")
@@ -201,10 +201,18 @@ def deploy_instance(subdomain: str) -> dict:
     domain = f"{subdomain}.ailab.infocepo.com"
 
     try:
+        runtime_settings()
         if not HERMES_WEBUI_PASSWORD:
             raise RuntimeError("HERMES_WEBUI_PASSWORD is not configured")
-        if not API_SERVER_KEY:
-            raise RuntimeError("API_SERVER_KEY is not configured")
+        if len(API_SERVER_KEY) < 16:
+            raise RuntimeError("API_SERVER_KEY must contain at least 16 characters")
+        k8s_post("secrets", {
+            "apiVersion": "v1", "kind": "Secret",
+            "metadata": {"name": f"{name}-runtime-secrets", "namespace": NAMESPACE},
+            "type": "Opaque",
+            "stringData": {"password": HERMES_WEBUI_PASSWORD, "API_SERVER_KEY": API_SERVER_KEY},
+        })
+        k8s_post("configmaps", runtime_configmap(name, NAMESPACE))
         config = build_config()
 
         # Data PVC: 20Gi, Workspace PVC: 5Gi
@@ -228,258 +236,11 @@ def deploy_instance(subdomain: str) -> dict:
 
 
 
-        # Build the deployment manifest as a dict (mirrors the working hermes-webui deployment)
-        deployment_body = {
-            "apiVersion": "apps/v1",
-            "kind": "Deployment",
-            "metadata": {
-                "name": name,
-                "namespace": NAMESPACE,
-                "labels": {
-                    "app": "agent-instance",
-                    "agent-instance": subdomain,
-                    "agent-hash": hash8
-                }
-            },
-            "spec": {
-                "replicas": 1,
-                "selector": {
-                    "matchLabels": {
-                        "app": "agent-instance",
-                        "agent-instance": subdomain
-                    }
-                },
-                "template": {
-                    "metadata": {
-                        "labels": {
-                            "app": "agent-instance",
-                            "agent-instance": subdomain,
-                            "agent-hash": hash8
-                        }
-                    },
-                    "spec": {
-                        # Tenant workloads never call the Kubernetes API.  Do not
-                        # expose a namespace credential to code or tools running
-                        # inside Hermes, even if the default ServiceAccount is
-                        # accidentally granted permissions by the cluster.
-                        "automountServiceAccountToken": False,
-                        "securityContext": {
-                            "fsGroup": 1000,
-                            "runAsGroup": 1000,
-                            "runAsUser": 1000
-                        },
-                        "initContainers": [
-                            {
-                                "name": "init-hermes-home",
-                                "image": "alpine:3.19",
-                                "command": ["sh", "-c"],
-                                "args": [
-                                    "mkdir -p /hermes-home/.hermes/webui /workspace && "
-                                    "echo '# Hermes workspace' > /workspace/.gitkeep && "
-                                    "if [ -f /configmap/config.yaml ]; then "
-                                    "cp /configmap/config.yaml /hermes-home/config.yaml && "
-                                    "echo 'config.yaml copied to PVC root'; fi && "
-                                    "echo '=== Init done ==='"
-                                ],
-                                "resources": {"limits": {"cpu": "50m", "memory": "64Mi"}},
-                                "securityContext": {"runAsUser": 0},
-                                "volumeMounts": [
-                                    {"mountPath": "/hermes-home", "name": "hermes-home"},
-                                    {"mountPath": "/workspace", "name": "workspace-data"},
-                                    {"mountPath": "/configmap", "name": "hermes-config", "readOnly": True}
-                                ]
-                            },
-                            {
-                                "name": "init-agent-src",
-                                "image": "nousresearch/hermes-agent:latest",
-                                "imagePullPolicy": "Always",
-                                "command": ["sh", "-c"],
-                                "args": [
-                                    "mkdir -p /hermes-home/hermes-agent && "
-                                    "if [ -d /opt/hermes ]; then "
-                                    "cp -r /opt/hermes/* /hermes-home/hermes-agent/ 2>/dev/null || true; "
-                                    "echo 'hermes-agent source copied to PVC'; "
-                                    "ls -la /hermes-home/hermes-agent/ | head -10; "
-                                    "fi && "
-                                    "chown -R 1000:1000 /hermes-home 2>/dev/null || true && "
-                                    "echo '=== Init done ==='"
-                                ],
-                                "resources": {"limits": {"cpu": "200m", "memory": "1Gi"}},
-                                "securityContext": {"runAsUser": 0},
-                                "volumeMounts": [
-                                    {"mountPath": "/hermes-home", "name": "hermes-home"}
-                                ]
-                            },
-                            {
-                                "name": "password-seed",
-                                "image": "python:3.12-alpine",
-                                "command": ["sh", "-c"],
-                                "args": [
-                                    "python3 -c '\nimport hashlib, os, json, pathlib\npathlib.Path(\"/hermes-home/.hermes/webui\").mkdir(parents=True, exist_ok=True)\nif not pathlib.Path(\"/hermes-home/.hermes/webui/settings.json\").exists():\n    password = os.environ[\"HERMES_WEBUI_PASSWORD\"].encode()\n    salt = os.urandom(16)\n    hash_val = hashlib.pbkdf2_hmac(\"sha256\", password, salt, 60000)\n    settings = {\n        \"password_hash\": hash_val.hex(),\n        \"password_salt\": salt.hex()\n    }\n    pathlib.Path(\"/hermes-home/.hermes/webui/settings.json\").write_text(json.dumps(settings))\n    print(\"Password seeded for fresh instance\")\nelse:\n    print(\"settings.json already exists, skipping password seed\")\n'\n",
-                                ],
-                                "resources": {"limits": {"cpu": "100m", "memory": "128Mi"}},
-                                "securityContext": {"runAsUser": 0},
-                                "env": [{"name": "HERMES_WEBUI_PASSWORD", "value": HERMES_WEBUI_PASSWORD}],
-                                "volumeMounts": [
-                                    {"mountPath": "/hermes-home", "name": "hermes-home"}
-                                ]
-                            }
-                        ],
-                        "containers": [
-                            {
-                                "name": "hermes-agent",
-                                "image": "nousresearch/hermes-agent:latest",
-                                "imagePullPolicy": "Always",
-                                "command": ["sh", "-c"],
-                                "args": ["hermes gateway run --no-supervise --force"],
-                                "ports": [{"containerPort": 8642, "name": "gateway", "protocol": "TCP"}],
-                                "readinessProbe": {
-                                    "exec": {
-                                        "command": [
-                                            "sh", "-c",
-                                            "python3 -c \"import socket; s=socket.socket(); s.settimeout(2); r=s.connect_ex(('127.0.0.1',8642)); s.close(); exit(0 if r==0 else 1)\""
-                                        ]
-                                    },
-                                    "initialDelaySeconds": 30,
-                                    "periodSeconds": 10,
-                                    "failureThreshold": 30,
-                                    "successThreshold": 1,
-                                    "timeoutSeconds": 5
-                                },
-                                "resources": {
-                                    "limits": {"cpu": "2", "memory": "4Gi"},
-                                    "requests": {"cpu": "25m", "memory": "128Mi"}
-                                },
-                                "securityContext": {"runAsUser": 1000, "runAsGroup": 1000},
-                                "volumeMounts": [
-                                    {"mountPath": "/home/hermes/.hermes", "name": "hermes-home"},
-                                    {"mountPath": "/workspace", "name": "workspace-data"},
-                                    {"mountPath": "/etc/hermes-config", "name": "hermes-config", "readOnly": True}
-                                ],
-                                "env": [
-                                    {"name": "HERMES_HOME", "value": "/home/hermes/.hermes"},
-                                    {"name": "HERMES_UID", "value": "1000"},
-                                    {"name": "HERMES_GID", "value": "1000"},
-                                    {"name": "LLM_BASE_URL", "value": LLM_BASE_URL},
-                                    {"name": "LLM_API_KEY", "value": LLM_API_KEY},
-                                    {"name": "LLM_PROVIDER", "value": LLM_PROVIDER},
-                                    {"name": "LLM_MODEL", "value": LLM_MODEL},
-                                    {"name": "HERMES_ALLOW_ROOT_GATEWAY", "value": "1"},
-                                    {"name": "HERMES_ACCEPT_HOOKS", "value": "1"},
-                                    {"name": "HERMES_DONT_CHECK_TTY", "value": "1"},
-                                    {"name": "HERMES_GATEWAY_NO_SUPERVISE", "value": "1"},
-                                    {"name": "MCP_DISABLE", "value": "1"},
-                                    {"name": "HERMES_CONFIG", "value": "/etc/hermes-config/config.yaml"},
-                                    {"name": "API_SERVER_KEY", "value": API_SERVER_KEY},
-                                    {"name": "API_SERVER_HOST", "value": "0.0.0.0"},
-                                    {"name": "API_SERVER_ENABLED", "value": "true"}
-                                ]
-                            },
-                            {
-                                "name": "hermes-dashboard",
-                                "image": "nousresearch/hermes-agent:latest",
-                                "imagePullPolicy": "Always",
-                                "command": ["hermes", "dashboard", "--host", "127.0.0.1"],
-                                "ports": [{"containerPort": 9119, "name": "dashboard", "protocol": "TCP"}],
-                                "readinessProbe": {
-                                    "exec": {
-                                        "command": [
-                                            "sh", "-c",
-                                            "python3 -c \"import socket; s=socket.socket(); s.settimeout(2); r=s.connect_ex(('127.0.0.1',9119)); s.close(); exit(0 if r==0 else 1)\""
-                                        ]
-                                    },
-                                    "initialDelaySeconds": 45,
-                                    "periodSeconds": 15,
-                                    "failureThreshold": 3,
-                                    "successThreshold": 1,
-                                    "timeoutSeconds": 10
-                                },
-                                "livenessProbe": {
-                                    "exec": {
-                                        "command": [
-                                            "sh", "-c",
-                                            "python3 -c \"import socket; s=socket.socket(); s.settimeout(2); r=s.connect_ex(('127.0.0.1',9119)); s.close(); exit(0 if r==0 else 1)\""
-                                        ]
-                                    },
-                                    "initialDelaySeconds": 60,
-                                    "periodSeconds": 30,
-                                    "failureThreshold": 3,
-                                    "successThreshold": 1,
-                                    "timeoutSeconds": 10
-                                },
-                                "resources": {
-                                    "limits": {"cpu": "500m", "memory": "512Mi"},
-                                    "requests": {"cpu": "25m", "memory": "64Mi"}
-                                },
-                                "securityContext": {"runAsUser": 1000, "runAsGroup": 1000},
-                                "volumeMounts": [
-                                    {"mountPath": "/home/hermes/.hermes", "name": "hermes-home"},
-                                    {"mountPath": "/etc/hermes-config", "name": "hermes-config", "readOnly": True}
-                                ],
-                                "env": [
-                                    {"name": "HERMES_HOME", "value": "/home/hermes/.hermes"},
-                                    {"name": "HERMES_UID", "value": "1000"},
-                                    {"name": "HERMES_GID", "value": "1000"},
-                                    {"name": "GATEWAY_HEALTH_URL", "value": "http://127.0.0.1:8642"},
-                                    {"name": "HERMES_CONFIG", "value": "/etc/hermes-config/config.yaml"},
-                                    {"name": "PATH", "value": "/opt/hermes/bin:/opt/hermes/.venv/bin:/opt/data/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}
-                                ]
-                            },
-                            {
-                                "name": "hermes-webui",
-                                "image": "ghcr.io/nesquena/hermes-webui:latest",
-                                "imagePullPolicy": "Always",
-                                "ports": [{"containerPort": 8787, "name": "webui", "protocol": "TCP"}],
-                                "readinessProbe": {
-                                    "httpGet": {"path": "/", "port": 8787, "scheme": "HTTP"},
-                                    "initialDelaySeconds": 30,
-                                    "periodSeconds": 15,
-                                    "failureThreshold": 3,
-                                    "successThreshold": 1,
-                                    "timeoutSeconds": 10
-                                },
-                                "livenessProbe": {
-                                    "httpGet": {"path": "/", "port": 8787, "scheme": "HTTP"},
-                                    "initialDelaySeconds": 60,
-                                    "periodSeconds": 30,
-                                    "failureThreshold": 3,
-                                    "successThreshold": 1,
-                                    "timeoutSeconds": 10
-                                },
-                                "resources": {
-                                    "limits": {"cpu": "500m", "memory": "2Gi"},
-                                    "requests": {"cpu": "25m", "memory": "128Mi"}
-                                },
-                                "securityContext": {"runAsUser": 0, "runAsGroup": 0},
-                                "volumeMounts": [
-                                    {"mountPath": "/home/hermeswebui/.hermes", "name": "hermes-home"},
-                                    {"mountPath": "/workspace", "name": "workspace-data"},
-                                    {"mountPath": "/etc/hermes-config", "name": "hermes-config", "readOnly": True}
-                                ],
-                                "env": [
-                                    {"name": "HERMES_WEBUI_HOST", "value": "0.0.0.0"},
-                                    {"name": "HERMES_WEBUI_PORT", "value": "8787"},
-                                    {"name": "HERMES_WEBUI_STATE_DIR", "value": "/home/hermeswebui/.hermes/webui"},
-                                    {"name": "HERMES_API_URL", "value": "http://127.0.0.1:8642"},
-                                    {"name": "HERMES_HOME", "value": "/home/hermeswebui/.hermes"},
-                                    {"name": "HERMES_CONFIG", "value": "/etc/hermes-config/config.yaml"},
-                                    {"name": "PYTHONPATH", "value": "/home/hermeswebui/.hermes/hermes-agent"},
-                                    {"name": "HERMES_NIX_BUILD", "value": "1"},
-                                    {"name": "WANTED_UID", "value": "1000"},
-                                    {"name": "WANTED_GID", "value": "1000"},
-                                    {"name": "HERMES_WEBUI_ONBOARDING_OPEN", "value": "1"}
-                                ]
-                            }
-                        ],
-                        "volumes": [
-                            {"name": "hermes-config", "configMap": {"name": f"{name}-config"}},
-                            {"name": "hermes-home", "persistentVolumeClaim": {"claimName": f"{name}-data"}},
-                            {"name": "workspace-data", "persistentVolumeClaim": {"claimName": f"{name}-workspace"}}
-                        ]
-                    }
-                }
-            }
-        }
+        deployment_body = render_deployment(
+            name, NAMESPACE, subdomain, hash8, secret_name=f"{name}-runtime-secrets",
+            llm_env={"LLM_BASE_URL": LLM_BASE_URL, "LLM_API_KEY": LLM_API_KEY,
+                     "LLM_PROVIDER": LLM_PROVIDER, "LLM_MODEL": LLM_MODEL},
+        )["items"][1]
         k8s_post("deployments", deployment_body)
 
         k8s_post("services", {
@@ -547,7 +308,7 @@ def api_deploy(req: DeployRequest, x_deploy_token: str | None = Header(default=N
         raise
 
 def change_password(subdomain: str, new_password: str) -> dict:
-    """Change instance password: hash, create job to update PVC, restart deployment."""
+    """Rotate a Secret-backed WebUI password using upstream native hashing."""
     if not new_password or len(new_password) < 4:
         raise HTTPException(status_code=400, detail="Password must be at least 4 characters")
 
@@ -565,62 +326,42 @@ def change_password(subdomain: str, new_password: str) -> dict:
     # PVC name: {base_name}-data where base_name = pod_name minus last 2 parts.
     parts = pod_name.split('-')
     base_name = '-'.join(parts[:-2])
-    pvc_name = f"{base_name}-data"
     deployment_name = base_name  # e.g. agent-9ae62006-vjourne-agent
 
-    # Generate hash (same algorithm as the seed initContainer)
-    salt = os.urandom(16).hex()
-    salt_bytes = bytes.fromhex(salt)
-    password_hash = hashlib.pbkdf2_hmac("sha256", new_password.encode(), salt_bytes, 60000).hex()
-
-    job_name = f"password-update-{subdomain}-{int(datetime.now().timestamp())}"
-
-    # Create a ephemeral Pod to write the new settings.json into the PVC
-    pod_body = {
-        "apiVersion": "v1",
-        "kind": "Pod",
-        "metadata": {"name": job_name, "namespace": NAMESPACE, "labels": {"app": "agent-instance", "job-type": "password-update"}},
-        "spec": {
-            "automountServiceAccountToken": False,
-            "containers": [{
-                "name": "update-password",
-                "image": "python:3.12-alpine",
-                "command": ["python3", "-c",
-                    f"import pathlib,json;s=pathlib.Path('/data/.hermes/webui/s'+'ettings.json');s.parent.mkdir(parents=True,exist_ok=True);s.write_text(json.dumps({{'password_hash':'{password_hash}','password_salt':'{salt}'}}))"
-                ],
-                "volumeMounts": [{"name": "data-vol", "mountPath": "/data"}]
-            }],
-            "restartPolicy": "Never",
-            "volumes": [{"name": "data-vol", "persistentVolumeClaim": {"claimName": pvc_name}}]
-        }
-    }
-
-    k8s_post("pods", pod_body)
-
-    # Trigger deployment rollout by adding a timestamp annotation (forces pod recreation)
-    try:
-        rollout_body = {
-            "spec": {
-                "template": {
-                    "metadata": {
-                        "annotations": {"password-changed-at": datetime.now().isoformat()}
-                    }
-                }
-            }
-        }
-        k8s_patch("deployments", deployment_name, rollout_body)
-    except Exception:
-        pass  # rollout may fail but job is created
+    # Let the pinned WebUI implement its native password hashing. Custom hashes
+    # written into settings.json drifted from upstream salt/iteration formats.
+    deployment = k8s_get(f"deployments/{deployment_name}")
+    containers = deployment.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [])
+    webui = next((c for c in containers if c.get("name") == "hermes-webui"), None)
+    if webui is None:
+        raise HTTPException(status_code=502, detail="Cannot find WebUI deployment")
+    secret_name = f"{deployment_name}-password-{secrets.token_hex(4)}"
+    k8s_post("secrets", {
+        "apiVersion": "v1", "kind": "Secret",
+        "metadata": {"name": secret_name, "namespace": NAMESPACE},
+        "type": "Opaque", "stringData": {"password": new_password},
+    })
+    webui["env"] = [e for e in webui.get("env", []) if e["name"] != "HERMES_WEBUI_PASSWORD"] + [
+        {"name": "HERMES_WEBUI_PASSWORD", "valueFrom":
+         {"secretKeyRef": {"name": secret_name, "key": "password"}}}]
+    rollout_body = {"spec": {"template": {"spec": {"containers": containers},
+                    "metadata": {"annotations": {"password-changed-at": datetime.now().isoformat()}}}}}
+    version = deployment.get("metadata", {}).get("resourceVersion")
+    if version:
+        rollout_body["metadata"] = {"resourceVersion": version}
+    k8s_patch("deployments", deployment_name, rollout_body)
 
     return {"success": True, "subdomain": subdomain}
 
 
 @app.post("/api/change-password")
-def api_change_password(req: ChangePasswordRequest):
+def api_change_password(req: ChangePasswordRequest, _: None = Depends(require_deploy_token)):
     try:
         return JSONResponse(change_password(req.subdomain, req.new_password))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
 
 
 class WebExtractRequest(BaseModel):
@@ -737,6 +478,10 @@ CONTENT = """<!DOCTYPE html>
                     <label for="subdomain">Sous-domaine :</label>
                     <input type="text" id="subdomain" name="subdomain" placeholder="ex: mon-projet" required>
                 </div>
+                <div class="form-group">
+                    <label for="deploy-token">Jeton de déploiement :</label>
+                    <input type="password" id="deploy-token" autocomplete="off">
+                </div>
                 <button type="submit" id="deploy-btn">Déployer</button>
             </form>
             <div id="result"></div>
@@ -757,7 +502,8 @@ CONTENT = """<!DOCTYPE html>
             try {
                 const resp = await fetch('/api/deploy', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 'Content-Type': 'application/json',
+                               'X-Deploy-Token': document.getElementById('deploy-token').value },
                     body: JSON.stringify({ subdomain })
                 });
                 let data;
