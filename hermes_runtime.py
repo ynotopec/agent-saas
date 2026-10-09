@@ -43,6 +43,45 @@ fi
 '''
 
 
+# Agent image supplies python-dotenv. Preserve unrelated settings and quoted,
+# multiline values using its parser, rather than treating .env as shell lines.
+RECONCILE_ENV = r'''import io, os, pathlib, tempfile
+from dotenv.parser import parse_stream
+home = pathlib.Path(os.environ["HERMES_HOME"])
+if not os.environ.get("API_SERVER_KEY", "").strip():
+    raise SystemExit("Explicit API_SERVER_KEY is required for reconciliation")
+p = home / ".env"
+if p.is_symlink():
+    raise SystemExit("Refusing a symlink .env")
+if p.exists():
+    original = p.read_text()
+    bindings = list(parse_stream(io.StringIO(original)))
+    if any(b.error for b in bindings):
+        raise SystemExit("Invalid .env; refusing to rewrite it")
+    updated = "".join(b.original.string for b in bindings if b.key != "API_SERVER_KEY")
+    if updated != original:
+        backup_dir = home / "backups" / "runtime-repair"
+        backup_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(backup_dir, 0o700)
+        os.chown(backup_dir, 1000, 1000)
+        fd, backup = tempfile.mkstemp(prefix="env-before-key-reconcile-", dir=backup_dir)
+        with os.fdopen(fd, "w") as f:
+            f.write(original)
+            f.flush(); os.fsync(f.fileno())
+        os.chown(backup, 1000, 1000)
+        fd, staged = tempfile.mkstemp(prefix=".env-reconcile-", dir=home)
+        try:
+            with os.fdopen(fd, "w") as f:
+                f.write(updated)
+                f.flush(); os.fsync(f.fileno())
+            os.chown(staged, 1000, 1000)
+            os.replace(staged, p)
+        finally:
+            if os.path.exists(staged): os.unlink(staged)
+        print("Reconciled inherited API_SERVER_KEY; private backup saved")
+'''
+
+
 def runtime_settings():
     """Use the checked-in fixed pair; raw image env vars cannot override it."""
     return production_images()
@@ -65,7 +104,7 @@ def repair_pod_spec(spec, name, *, password_secret=None, gateway_secret=None, im
     legacy_password = next((e for c in spec.get("initContainers", []) if c["name"] == "password-seed"
                             for e in c.get("env", []) if e["name"] == "HERMES_WEBUI_PASSWORD"), None)
     init = [c for c in spec.get("initContainers", [])
-            if c["name"] not in ("init-agent-src", "password-seed")]
+            if c["name"] not in ("init-agent-src", "password-seed", "reconcile-gateway-env")]
     for c in init:
         if c["name"] == "init-hermes-home":
             c["command"] = ["sh", "-c"]
@@ -82,6 +121,7 @@ def repair_pod_spec(spec, name, *, password_secret=None, gateway_secret=None, im
             c["image"] = agent_image
             c["imagePullPolicy"] = "IfNotPresent"
             c.pop("command", None)
+            c["env"] = [e for e in c.get("env", []) if e["name"] != "HERMES_GATEWAY_NO_SUPERVISE"]
             c["args"] = ["gateway", "run"] if c["name"] == "hermes-agent" else ["dashboard", "--host", "127.0.0.1"]
             c["securityContext"] = dict(c.get("securityContext", {}), runAsUser=0, runAsGroup=0)
     webui = containers["hermes-webui"]
@@ -106,8 +146,24 @@ def repair_pod_spec(spec, name, *, password_secret=None, gateway_secret=None, im
         key = {"name": "API_SERVER_KEY", "valueFrom": {"secretKeyRef":
                {"name": gateway_secret, "key": "API_SERVER_KEY"}}}
         containers["hermes-agent"]["env"] = _put(containers["hermes-agent"].get("env", []), key)
-    if key is None:
+    if key is None or ("value" in key and not key["value"].strip()):
         raise ValueError("Agent API_SERVER_KEY is missing; cannot configure gateway authentication")
+    agent = containers["hermes-agent"]
+    home_env = next((e for e in agent.get("env", []) if e["name"] == "HERMES_HOME"),
+                    {"name": "HERMES_HOME", "value": "/home/hermes/.hermes"})
+    home_path = home_env.get("value")
+    home_mount = next((m for m in agent.get("volumeMounts", []) if m["mountPath"] == home_path), None)
+    if home_mount is None or home_mount.get("readOnly"):
+        raise ValueError("Agent HERMES_HOME requires an explicit writable volume mount")
+    spec["initContainers"].append({
+        "name": "reconcile-gateway-env", "image": agent_image,
+        "imagePullPolicy": "IfNotPresent",
+        "command": ["/opt/hermes/.venv/bin/python", "-c"], "args": [RECONCILE_ENV],
+        "env": [copy.deepcopy(home_env), copy.deepcopy(key)],
+        "securityContext": {"runAsUser": 0, "runAsGroup": 0},
+        "resources": {"requests": {"cpu": "25m", "memory": "32Mi"},
+                      "limits": {"cpu": "200m", "memory": "128Mi"}},
+        "volumeMounts": [copy.deepcopy(home_mount)]})
     env = _put(env, dict(copy.deepcopy(key), name="HERMES_WEBUI_GATEWAY_API_KEY"))
     if legacy_password and not any(e["name"] == "HERMES_WEBUI_PASSWORD" for e in env):
         env = _put(env, copy.deepcopy(legacy_password))
@@ -142,7 +198,7 @@ def render_deployment(name, namespace, subdomain, instance_hash, *, secret_name=
         ("LLM_BASE_URL", "https://api-nothink.ailab.infocepo.com/v1"),
         ("LLM_API_KEY", ""), ("LLM_PROVIDER", "infocepo-alias"), ("LLM_MODEL", "ai-thinking"),
         ("HERMES_ALLOW_ROOT_GATEWAY", "1"), ("HERMES_ACCEPT_HOOKS", "1"),
-        ("HERMES_DONT_CHECK_TTY", "1"), ("HERMES_GATEWAY_NO_SUPERVISE", "1"),
+        ("HERMES_DONT_CHECK_TTY", "1"),
         ("MCP_DISABLE", "1"),
         ("API_SERVER_ENABLED", "true"), ("API_SERVER_HOST", "0.0.0.0"))]
     if llm_env:
@@ -155,8 +211,7 @@ def render_deployment(name, namespace, subdomain, instance_hash, *, secret_name=
             "volumeMounts": [{"name": "hermes-home", "mountPath": "/hermes-home"}, workspace,
                              {"name": "hermes-config", "mountPath": "/configmap", "readOnly": True}]}],
         "containers": [
-            {"name": "hermes-agent", "image": agent_image, "command": ["sh", "-c"],
-             "args": ["hermes gateway run --no-supervise --force"], "env": env,
+            {"name": "hermes-agent", "image": agent_image, "args": ["gateway", "run"], "env": env,
              "ports": [{"containerPort": 8642, "name": "gateway"}],
              "volumeMounts": [home, config, workspace],
              "readinessProbe": {"tcpSocket": {"port": 8642}, "periodSeconds": 10},

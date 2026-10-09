@@ -8,14 +8,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from release_policy import check_release, delay_days, production_file, read_json
 
-CANARY_CHECK = '''from run_agent import AIAgent
-import subprocess, urllib.request
-assert AIAgent is not None
-with urllib.request.urlopen("http://127.0.0.1:8787/health", timeout=5) as response:
-    assert response.status == 200
-assert subprocess.check_output(["/bin/sh", "-c", "printf hermes-canary"], text=True) == "hermes-canary"
-print("AIAgent + health + shell OK")
-'''
+CANARY_CHECK = Path(__file__).with_name('hermes-canary.py').read_text()
 
 
 def main(argv=None):

@@ -24,8 +24,10 @@ mkdir -p "$TEST_ROOT/source" "$TEST_ROOT/home" "$TEST_ROOT/workspace"
 PYTHONPATH="$REPO_DIR" python3 - "$TEST_ROOT" <<'PY'
 from pathlib import Path
 import sys
-from hermes_runtime import COPY_SOURCE
+from hermes_runtime import COPY_SOURCE, RECONCILE_ENV
 Path(sys.argv[1], "copy-source.sh").write_text(COPY_SOURCE)
+Path(sys.argv[1], "reconcile-env.py").write_text(RECONCILE_ENV)
+Path(sys.argv[1], "home", ".env").write_text("API_SERVER_KEY=stale-pvc-key\nPRESERVED_SETTING=keep\n")
 PY
 docker pull "$AGENT_IMAGE"
 docker pull "$WEBUI_IMAGE"
@@ -33,6 +35,12 @@ docker run --rm --entrypoint sh -u 0 \
   -v "$TEST_ROOT/source:/agent-src" \
   -v "$TEST_ROOT/copy-source.sh:/copy-source.sh:ro" \
   "$AGENT_IMAGE" /copy-source.sh
+# Exercise the same init repair on a stale PVC before native entrypoints.
+docker run --rm --entrypoint /opt/hermes/.venv/bin/python -u 0 \
+  -e HERMES_HOME=/home/hermes/.hermes -e API_SERVER_KEY=hermes-ci-disposable-key \
+  -v "$TEST_ROOT/home:/home/hermes/.hermes" \
+  -v "$TEST_ROOT/reconcile-env.py:/reconcile-env.py:ro" \
+  "$AGENT_IMAGE" /reconcile-env.py
 docker network create "$TEST_PREFIX-net" >/dev/null
 # No entrypoint override: gateway run is exactly the official Compose command.
 docker run -d --name "$TEST_PREFIX-agent" --network "$TEST_PREFIX-net" \
@@ -62,6 +70,28 @@ for attempt in $(seq 1 120); do
       'import subprocess; assert subprocess.check_output(["/bin/sh", "-c", "printf hermes-check"], text=True) == "hermes-check"; print("AIAgent + health + shell OK")'
     docker exec --user 1000 "$TEST_PREFIX-webui" /app/venv/bin/python -c \
       'import socket,sys; s=socket.create_connection((sys.argv[1],8642),timeout=5); s.close(); print("Gateway reachable")' "$TEST_PREFIX-agent"
+    # Restart over the persisted gateway state to catch supervision collisions.
+    docker restart "$TEST_PREFIX-agent" >/dev/null
+    docker exec --user 1000 "$TEST_PREFIX-webui" /app/venv/bin/python -c '
+import json, os, time, urllib.error, urllib.request
+url = os.environ["HERMES_API_URL"] + "/v1/models"
+for attempt in range(60):
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, headers={"Authorization": "Bearer hermes-ci-disposable-key"}), timeout=5) as response:
+            assert response.status == 200
+        break
+    except (OSError, urllib.error.URLError):
+        time.sleep(2)
+else:
+    raise RuntimeError("Gateway did not recover after restart")
+try:
+    urllib.request.urlopen(urllib.request.Request(url, headers={"Authorization": "Bearer stale-pvc-key"}), timeout=5)
+except urllib.error.HTTPError as exc:
+    assert exc.code == 401
+else:
+    raise RuntimeError("Gateway accepted the stale PVC key")
+print("Persisted-home restart + reconciled gateway authentication OK")
+'
     exit 0
   fi
   test "$(docker inspect -f '{{.State.Running}}' "$TEST_PREFIX-webui")" = true || break

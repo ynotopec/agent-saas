@@ -13,7 +13,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: pip install pytest fastapi httpx pyyaml argon2-cffi trafilatura
+      - run: pip install pytest fastapi httpx pyyaml argon2-cffi trafilatura python-dotenv
       - name: Install Helm
         run: |
           curl -fsSLO https://get.helm.sh/helm-v3.19.0-linux-amd64.tar.gz

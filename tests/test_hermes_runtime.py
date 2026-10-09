@@ -165,3 +165,53 @@ def test_native_password_inherited_from_legacy_seed(existing):
     webui = next(c for c in repaired['containers'] if c['name'] == 'hermes-webui')
     assert password in webui['env']
     assert 'password-seed' not in {c['name'] for c in repaired['initContainers']}
+
+
+def test_repair_restores_s6_and_reconciles_pvc_key(existing):
+    spec = existing['spec']['template']['spec']
+    agent = next(c for c in spec['containers'] if c['name'] == 'hermes-agent')
+    agent['env'].append({'name': 'HERMES_GATEWAY_NO_SUPERVISE', 'value': '1'})
+    agent['args'] = ['gateway', 'run', '--no-supervise', '--force']
+    fixed = runtime.repair_pod_spec(spec, 'test')
+    agent = next(c for c in fixed['containers'] if c['name'] == 'hermes-agent')
+    assert agent['args'] == ['gateway', 'run']
+    assert not any(e['name'] == 'HERMES_GATEWAY_NO_SUPERVISE' for e in agent['env'])
+    reconcile = next(c for c in fixed['initContainers'] if c['name'] == 'reconcile-gateway-env')
+    key = next(e for e in agent['env'] if e['name'] == 'API_SERVER_KEY')
+    assert reconcile['env'][1] == key
+    assert reconcile['image'] == agent['image']
+    assert reconcile['volumeMounts'][0] in agent['volumeMounts']
+    assert runtime.repair_pod_spec(fixed, 'test') == fixed
+
+
+def test_pvc_reconciliation_preserves_secrets_multiline_and_backup(tmp_path, monkeypatch):
+    monkeypatch.setenv('HERMES_HOME', str(tmp_path))
+    monkeypatch.setenv('API_SERVER_KEY', 'container-key')
+    original = '# keep comment\nexport API_SERVER_KEY="old\nkey"\nOTHER="keep\nme"\nAPI_SERVER_KEY=duplicate\n'
+    env = tmp_path / '.env'; env.write_text(original)
+    # Avoid requiring root in developer/CI tests; content and modes are real.
+    with patch('os.chown'):
+        exec(runtime.RECONCILE_ENV, {})
+        exec(runtime.RECONCILE_ENV, {})
+    assert env.read_text() == '# keep comment\nOTHER="keep\nme"\n'
+    backups = list((tmp_path / 'backups/runtime-repair').iterdir())
+    assert len(backups) == 1 and backups[0].read_text() == original
+    assert backups[0].stat().st_mode & 0o777 == 0o600
+    assert env.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize('bad', ['API_SERVER_KEY="unterminated', None])
+def test_pvc_reconciliation_rejects_invalid_or_symlink_env(tmp_path, monkeypatch, bad):
+    monkeypatch.setenv('HERMES_HOME', str(tmp_path))
+    monkeypatch.setenv('API_SERVER_KEY', 'container-key')
+    env = tmp_path / '.env'
+    if bad is None:
+        target = tmp_path / 'external'; target.write_text('API_SERVER_KEY=old\n')
+        env.symlink_to(target)
+    else:
+        env.write_text(bad)
+    before = env.read_text()
+    with pytest.raises(SystemExit):
+        exec(runtime.RECONCILE_ENV, {})
+    assert env.read_text() == before
+    assert not (tmp_path / 'backups').exists()
