@@ -8,11 +8,13 @@ from typing import List
 from datetime import datetime
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, SecretStr
 from hermes_runtime import render_deployment, runtime_settings
 
 class DeployRequest(BaseModel):
     subdomain: str
+    password: SecretStr | None = None
+    password_confirmation: SecretStr | None = None
 
 class ChangePasswordRequest(BaseModel):
     subdomain: str
@@ -194,15 +196,24 @@ def build_config() -> str:
         f"  extract_backend: trafilatura\n"
     )
 
-def deploy_instance(subdomain: str) -> dict:
+def deploy_instance(subdomain: str, password: str | None = None,
+                    password_confirmation: str | None = None) -> dict:
     subdomain = validate_subdomain(subdomain)
+    if password:
+        if len(password) < 4:
+            raise ValueError("Le mot de passe doit contenir au moins 4 caractères")
+        if password != password_confirmation:
+            raise ValueError("Les mots de passe ne correspondent pas")
+    elif password_confirmation:
+        raise ValueError("Renseignez le mot de passe avant sa confirmation")
+    initial_password = password or HERMES_WEBUI_PASSWORD
     hash8 = os.urandom(4).hex()  # 32-bit random, 8 hex chars
     name = f"agent-{hash8}-{subdomain}"
     domain = f"{subdomain}.ailab.infocepo.com"
 
     try:
         runtime_settings()
-        if not HERMES_WEBUI_PASSWORD:
+        if not initial_password:
             raise RuntimeError("HERMES_WEBUI_PASSWORD is not configured")
         if len(API_SERVER_KEY) < 16:
             raise RuntimeError("API_SERVER_KEY must contain at least 16 characters")
@@ -210,7 +221,7 @@ def deploy_instance(subdomain: str) -> dict:
             "apiVersion": "v1", "kind": "Secret",
             "metadata": {"name": f"{name}-runtime-secrets", "namespace": NAMESPACE},
             "type": "Opaque",
-            "stringData": {"password": HERMES_WEBUI_PASSWORD, "API_SERVER_KEY": API_SERVER_KEY},
+            "stringData": {"password": initial_password, "API_SERVER_KEY": API_SERVER_KEY},
         })
         config = build_config()
 
@@ -297,7 +308,9 @@ def api_instances():
 def api_deploy(req: DeployRequest, x_deploy_token: str | None = Header(default=None)):
     try:
         require_deploy_token(x_deploy_token)
-        result = deploy_instance(req.subdomain)
+        result = deploy_instance(req.subdomain,
+                                 req.password.get_secret_value() if req.password else None,
+                                 req.password_confirmation.get_secret_value() if req.password_confirmation else None)
         if "error" in result:
             raise HTTPException(status_code=502, detail=result["error"])
         return JSONResponse(result)
@@ -452,7 +465,11 @@ CONTENT = """<!DOCTYPE html>
         .card { background: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); padding: 2rem; margin-bottom: 1rem; }
         .form-group { margin-bottom: 1rem; }
         label { display: block; margin-bottom: 0.5rem; font-weight: 500; }
-        input[type="text"] { width: 100%; padding: 0.75rem; border: 1px solid #ddd; border-radius: 4px; font-size: 1rem; }
+        input[type="text"], input[type="password"] { width: 100%; padding: 0.75rem; border: 1px solid #ddd; border-radius: 4px; font-size: 1rem; }
+        .password-row { display: flex; gap: 0.5rem; }
+        .password-row input { flex: 1; min-width: 0; }
+        .password-row button { padding: 0.5rem 0.75rem; }
+        .hint { display: block; margin-top: 0.5rem; color: #555; }
         input:focus { outline: none; border-color: #1a73e8; box-shadow: 0 0 0 2px rgba(26,115,232,0.2); }
         button { background: #1a73e8; color: white; padding: 0.75rem 1.5rem; border: none; border-radius: 4px; font-size: 1rem; cursor: pointer; }
         button:hover { background: #1557b0; }
@@ -481,6 +498,20 @@ CONTENT = """<!DOCTYPE html>
                     <label for="deploy-token">Jeton de déploiement :</label>
                     <input type="password" id="deploy-token" autocomplete="off">
                 </div>
+                <div class="form-group">
+                    <label for="instance-password">Mot de passe personnalisé (facultatif) :</label>
+                    <div class="password-row">
+                        <input type="password" id="instance-password" autocomplete="new-password"
+                               minlength="4" aria-describedby="password-hint">
+                        <button type="button" id="toggle-password" aria-label="Afficher les mots de passe"
+                                aria-pressed="false">👁</button>
+                    </div>
+                    <small class="hint" id="password-hint">Laissez vide pour utiliser le mot de passe par défaut.</small>
+                </div>
+                <div class="form-group" id="password-confirmation-group" hidden>
+                    <label for="password-confirmation">Confirmer le mot de passe :</label>
+                    <input type="password" id="password-confirmation" autocomplete="new-password" minlength="4">
+                </div>
                 <button type="submit" id="deploy-btn">Déployer</button>
             </form>
             <div id="result"></div>
@@ -491,9 +522,41 @@ CONTENT = """<!DOCTYPE html>
         </div>
     </div>
     <script>
+        const passwordInput = document.getElementById('instance-password');
+        const confirmationInput = document.getElementById('password-confirmation');
+        const passwordToggle = document.getElementById('toggle-password');
+        function updatePasswordFields() {
+            const custom = passwordInput.value.length > 0;
+            document.getElementById('password-confirmation-group').hidden = !custom;
+            confirmationInput.required = custom;
+            if (!custom) confirmationInput.value = '';
+            confirmationInput.setCustomValidity(custom && confirmationInput.value &&
+                confirmationInput.value !== passwordInput.value ? 'Les mots de passe ne correspondent pas' : '');
+        }
+        passwordInput.addEventListener('input', updatePasswordFields);
+        confirmationInput.addEventListener('input', updatePasswordFields);
+        passwordToggle.addEventListener('click', () => {
+            const show = passwordInput.type === 'password';
+            passwordInput.type = confirmationInput.type = show ? 'text' : 'password';
+            passwordToggle.setAttribute('aria-pressed', String(show));
+            passwordToggle.setAttribute('aria-label', show ? 'Masquer les mots de passe' : 'Afficher les mots de passe');
+        });
+        updatePasswordFields();
+
         async function deploy(e) {
             e.preventDefault();
             const subdomain = document.getElementById('subdomain').value;
+            updatePasswordFields();
+            if (passwordInput.value && passwordInput.value !== confirmationInput.value) {
+                confirmationInput.setCustomValidity('Les mots de passe ne correspondent pas');
+                confirmationInput.reportValidity();
+                return;
+            }
+            const payload = { subdomain };
+            if (passwordInput.value) {
+                payload.password = passwordInput.value;
+                payload.password_confirmation = confirmationInput.value;
+            }
             const btn = document.getElementById('deploy-btn');
             const result = document.getElementById('result');
             btn.disabled = true;
@@ -503,7 +566,7 @@ CONTENT = """<!DOCTYPE html>
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json',
                                'X-Deploy-Token': document.getElementById('deploy-token').value },
-                    body: JSON.stringify({ subdomain })
+                    body: JSON.stringify(payload)
                 });
                 let data;
                 try { data = await resp.json(); } catch { data = { error: 'Bad response' }; }
@@ -514,6 +577,11 @@ CONTENT = """<!DOCTYPE html>
                     if (data.success) {
                         result.innerHTML = '<div class="result success">✅ Déployé !<br><a href="' + data.url + '" target="_blank">' + data.url + '</a></div>';
                         document.getElementById('subdomain').value = '';
+                        passwordInput.value = confirmationInput.value = '';
+                        passwordInput.type = confirmationInput.type = 'password';
+                        passwordToggle.setAttribute('aria-pressed', 'false');
+                        passwordToggle.setAttribute('aria-label', 'Afficher les mots de passe');
+                        updatePasswordFields();
                         loadInstances();
                     } else {
                         result.innerHTML = '<div class="result error">❌ ' + errorMsg + '</div>';

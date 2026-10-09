@@ -55,6 +55,19 @@ kubectl apply -f manifests/05-ingress.yaml -n demo1
 kubectl -n demo1 rollout status deploy/agents-saas --timeout=60s
 ```
 
+### Choisir le mot de passe à la création
+
+Le formulaire accepte un **mot de passe personnalisé facultatif**, avec
+confirmation et bouton d’affichage. Les deux champs vides utilisent le mot de
+passe par défaut `HERMES_WEBUI_PASSWORD` du SaaS, sans le préremplir ni le renvoyer
+au navigateur. Un mot de passe personnalisé doit être confirmé à l’identique
+et contenir au moins quatre caractères, comme pour la modification existante.
+Il est enregistré dans le Secret runtime de cette seule instance.
+
+L’API `/api/deploy` accepte aussi `password` et `password_confirmation` ; les
+anciens appels avec seulement `subdomain` continuent à utiliser le défaut.
+Les saisies incorrectes sont rejetées avant toute création Kubernetes.
+
 ### Corriger les instances Hermes existantes
 
 Mettre à jour le code ne retire pas le token des pods déjà démarrés. Le script

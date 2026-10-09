@@ -362,3 +362,56 @@ class TestWebExtractEndpoint:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestOptionalCreationPassword:
+    @pytest.mark.parametrize('fields', [{}, {'password': '', 'password_confirmation': ''},
+                                       {'password': None, 'password_confirmation': None}])
+    @patch('app.k8s_post')
+    def test_empty_or_omitted_password_uses_default(self, create, client, fields):
+        response = client.post('/api/deploy', headers=AUTH_HEADERS, json={'subdomain': 'default', **fields})
+        assert response.status_code == 200
+        secret = next(c.args[1] for c in create.call_args_list if c.args[0] == 'secrets')
+        assert secret['stringData']['password'] == 'test-webui-password'
+        assert 'test-webui-password' not in response.text
+        assert 'test-webui-password' not in client.get('/').text
+
+    @pytest.mark.parametrize('password', ['instance-only-password', '  mot-dé-passe  '])
+    @patch('app.k8s_post')
+    def test_custom_password_only_changes_instance_secret(self, create, client, password):
+        response = client.post('/api/deploy', headers=AUTH_HEADERS, json={
+            'subdomain': 'custom', 'password': password, 'password_confirmation': password})
+        assert response.status_code == 200
+        secret = next(c.args[1] for c in create.call_args_list if c.args[0] == 'secrets')
+        assert secret['stringData']['password'] == password
+        deployment = next(c.args[1] for c in create.call_args_list if c.args[0] == 'deployments')
+        webui = next(c for c in deployment['spec']['template']['spec']['containers'] if c['name'] == 'hermes-webui')
+        password_env = next(e for e in webui['env'] if e['name'] == 'HERMES_WEBUI_PASSWORD')
+        assert password_env['valueFrom']['secretKeyRef']['name'] == secret['metadata']['name']
+        assert password not in response.text
+        assert app_module.HERMES_WEBUI_PASSWORD == 'test-webui-password'
+
+    @pytest.mark.parametrize('fields', [
+        {'password': 'chosen-password', 'password_confirmation': 'different-password'},
+        {'password': 'chosen-password'},
+        {'password_confirmation': 'orphan-confirmation'},
+        {'password': 'abc', 'password_confirmation': 'abc'},
+    ])
+    @patch('app.k8s_post')
+    def test_invalid_password_rejected_before_kubernetes(self, create, client, fields):
+        response = client.post('/api/deploy', headers=AUTH_HEADERS, json={'subdomain': 'invalid', **fields})
+        assert response.status_code == 400
+        create.assert_not_called()
+        assert all(value not in response.text for value in fields.values())
+
+    @patch('app.k8s_post')
+    def test_custom_password_works_without_configured_default(self, create, client, monkeypatch):
+        monkeypatch.setattr(app_module, 'HERMES_WEBUI_PASSWORD', '')
+        response = client.post('/api/deploy', headers=AUTH_HEADERS, json={
+            'subdomain': 'custom', 'password': 'chosen-password', 'password_confirmation': 'chosen-password'})
+        assert response.status_code == 200
+
+    def test_request_representation_masks_passwords(self):
+        request = app_module.DeployRequest(subdomain='custom', password='chosen-password',
+                                           password_confirmation='chosen-password')
+        assert 'chosen-password' not in repr(request)
