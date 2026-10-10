@@ -23,6 +23,15 @@ spec:
         ports:
         - containerPort: 8000
         env:
+        - name: HERMES_RELEASE_FILE
+          value: /etc/hermes-release/hermes-images.json
+        - name: HERMES_RELEASE_DELAY_DAYS
+          value: "7"
+        - name: DEPLOY_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: agents-saas-secrets
+              key: DEPLOY_TOKEN
         - name: LLM_BASE_URL
           value: "https://api-nothink.ailab.infocepo.com/v1"
         - name: LLM_API_KEY
@@ -63,6 +72,9 @@ spec:
           initialDelaySeconds: 5
           periodSeconds: 30
         volumeMounts:
+        - name: hermes-release
+          mountPath: /etc/hermes-release
+          readOnly: true
         - name: app-files
           mountPath: /app
         - name: pip-packages
@@ -80,3 +92,6 @@ spec:
           name: agents-saas-app
       - name: pip-packages
         emptyDir: {}
+      - name: hermes-release
+        configMap:
+          name: agents-saas-release

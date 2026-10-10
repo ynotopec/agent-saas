@@ -6,6 +6,7 @@ metadata:
     {{- include "hermes-webui.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount }}
+  progressDeadlineSeconds: 1800
   strategy:
     type: Recreate
   selector:
@@ -27,8 +28,8 @@ spec:
       automountServiceAccountToken: false
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
-      {{- if and .Values.hermesConfig.seed.enabled .Values.persistentStorage.hermesHome.enabled }}
       initContainers:
+        {{- if and .Values.hermesConfig.seed.enabled .Values.persistentStorage.hermesHome.enabled }}
         - name: seed-hermes-config
           image: "{{ .Values.hermesConfig.seed.initImage.repository }}:{{ .Values.hermesConfig.seed.initImage.tag }}"
           imagePullPolicy: {{ .Values.hermesConfig.seed.initImage.pullPolicy }}
@@ -54,10 +55,21 @@ spec:
             - name: hermes-config-seed
               mountPath: /hermes-config
               readOnly: true
-      {{- end }}
+        {{- end }}
+        - name: init-agent-src
+          image: {{ printf "%s@%s" .Values.agentImage.repository .Values.agentImage.digest | quote }}
+          imagePullPolicy: IfNotPresent
+          command: ["sh", "-c"]
+          args:
+            - {{ .Files.Get "runtime/copy-source.sh" | toJson }}
+          securityContext:
+            runAsUser: 0
+          volumeMounts:
+            - name: hermes-agent-src
+              mountPath: /agent-src
       containers:
         - name: hermes-webui
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          image: {{ printf "%s@%s" .Values.image.repository .Values.image.digest | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
@@ -66,10 +78,12 @@ spec:
               containerPort: {{ .Values.service.port }}
               protocol: TCP
           env:
+            - name: HERMES_WEBUI_AGENT_DIR
+              value: /home/hermeswebui/.hermes/hermes-agent
             - name: WANTED_UID
-              value: "1024"
+              value: "1000"
             - name: WANTED_GID
-              value: "1024"
+              value: "1000"
             {{- range $name, $value := .Values.env }}
             - name: {{ $name }}
               value: {{ $value | quote }}
@@ -86,6 +100,9 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           volumeMounts:
+            - name: hermes-agent-src
+              mountPath: /home/hermeswebui/.hermes/hermes-agent
+              readOnly: true
             {{- if .Values.persistentStorage.hermesHome.enabled }}
             - name: hermes-home
               mountPath: {{ .Values.persistentStorage.hermesHome.mountPath }}
@@ -94,13 +111,30 @@ spec:
             - name: workspace
               mountPath: {{ .Values.persistentStorage.workspace.mountPath }}
             {{- end }}
+          startupProbe:
+            exec:
+              command:
+                - /app/venv/bin/python
+                - -c
+                - {{ .Files.Get "runtime/probe.py" | toJson }}
+            periodSeconds: 10
+            timeoutSeconds: 20
+            failureThreshold: 120
           livenessProbe:
             {{- toYaml .Values.livenessProbe | nindent 12 }}
           readinessProbe:
-            {{- toYaml .Values.readinessProbe | nindent 12 }}
+            exec:
+              command:
+                - /app/venv/bin/python
+                - -c
+                - {{ .Files.Get "runtime/probe.py" | toJson }}
+            periodSeconds: 30
+            timeoutSeconds: 20
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
       volumes:
+        - name: hermes-agent-src
+          emptyDir: {}
         {{- if and .Values.hermesConfig.seed.enabled .Values.persistentStorage.hermesHome.enabled }}
         - name: hermes-config-seed
           secret:

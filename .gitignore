@@ -9,3 +9,5 @@ build/
 .env
 .env.*
 !/.env.example
+
+hermes-runtime-backups/

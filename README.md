@@ -1,5 +1,9 @@
 # Agents SaaS — Deploy from Zero
 
+**Runtime Hermes :** images officielles fixes, publiées depuis au moins sept jours.
+Voir [la procédure de correction et migration](docs/hermes-runtime-repair.md)
+pour les instances existantes, futures et les releases Helm.
+
 Dashboard FastAPI pour gérer des instances Hermes sur Kubernetes. Crée, liste et gère des agents avec interface WebUI, sans Helm ni manifests statiques.
 
 ## Architecture
@@ -35,8 +39,13 @@ kubectl -n demo1 create secret generic agents-saas-secrets \
   --from-literal=API_SERVER_KEY='<random-api-server-key>' \
   --from-literal=DEPLOY_TOKEN='<random-dashboard-token>' \
   --from-literal=HERMES_WEBUI_PASSWORD='<initial-instance-password>'
+kubectl -n demo1 create configmap agents-saas-release \
+  --from-file=hermes-images.json=releases/hermes-images.json \
+  --dry-run=client -o yaml | kubectl apply -f -
 kubectl create configmap agents-saas-app \
   --from-file=app.py=app.py \
+  --from-file=hermes_runtime.py=hermes_runtime.py \
+  --from-file=release_policy.py=release_policy.py \
   --dry-run=client -o yaml | kubectl apply -f - -n demo1
 kubectl apply -f manifests/03-deployment.yaml -n demo1
 kubectl apply -f manifests/04-service.yaml -n demo1
@@ -45,6 +54,19 @@ kubectl apply -f manifests/05-ingress.yaml -n demo1
 # 3. Vérifier
 kubectl -n demo1 rollout status deploy/agents-saas --timeout=60s
 ```
+
+### Choisir le mot de passe à la création
+
+Le formulaire accepte un **mot de passe personnalisé facultatif**, avec
+confirmation et bouton d’affichage. Les deux champs vides utilisent le mot de
+passe par défaut `HERMES_WEBUI_PASSWORD` du SaaS, sans le préremplir ni le renvoyer
+au navigateur. Un mot de passe personnalisé doit être confirmé à l’identique
+et contenir au moins quatre caractères, comme pour la modification existante.
+Il est enregistré dans le Secret runtime de cette seule instance.
+
+L’API `/api/deploy` accepte aussi `password` et `password_confirmation` ; les
+anciens appels avec seulement `subdomain` continuent à utiliser le défaut.
+Les saisies incorrectes sont rejetées avant toute création Kubernetes.
 
 ### Corriger les instances Hermes existantes
 
