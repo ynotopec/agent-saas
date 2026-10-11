@@ -13,6 +13,8 @@ import app as app_module
 from app import app, build_config, validate_subdomain
 
 AUTH_HEADERS = {"X-Deploy-Token": "test-deploy-token"}
+# A custom password, entered twice, is mandatory for every new instance.
+VALID_PASSWORD = {"password": "chosen-password", "password_confirmation": "chosen-password"}
 
 
 @pytest.fixture
@@ -86,13 +88,13 @@ class TestDeployEndpoint:
 
     def test_deploy_requires_authentication(self, client):
         """POST /api/deploy should reject requests without the shared token."""
-        response = client.post("/api/deploy", json={"subdomain": "test"})
+        response = client.post("/api/deploy", json={"subdomain": "test", **VALID_PASSWORD})
         assert response.status_code == 401
 
     @patch('app.k8s_post')
     def test_deploy_returns_success(self, mock_k8s_post, client):
         """POST /api/deploy should return success response when K8s calls succeed."""
-        response = client.post("/api/deploy", headers=AUTH_HEADERS, json={"subdomain": "test"})
+        response = client.post("/api/deploy", headers=AUTH_HEADERS, json={"subdomain": "test", **VALID_PASSWORD})
         assert response.status_code == 200
         data = response.json()
         assert data["success"] is True
@@ -104,7 +106,7 @@ class TestDeployEndpoint:
     @patch('app.k8s_post')
     def test_deploy_returns_correct_name(self, mock_k8s_post, client):
         """Deploy should return name with format agent-<hash>-<subdomain>."""
-        response = client.post("/api/deploy", headers=AUTH_HEADERS, json={"subdomain": "myapp"})
+        response = client.post("/api/deploy", headers=AUTH_HEADERS, json={"subdomain": "myapp", **VALID_PASSWORD})
         assert response.status_code == 200
         data = response.json()
         assert data["name"].startswith("agent-")
@@ -112,13 +114,13 @@ class TestDeployEndpoint:
 
     def test_deploy_invalid_subdomain(self, client):
         """POST /api/deploy with invalid subdomain should return 400."""
-        response = client.post("/api/deploy", headers=AUTH_HEADERS, json={"subdomain": "INVALID"})
+        response = client.post("/api/deploy", headers=AUTH_HEADERS, json={"subdomain": "INVALID", **VALID_PASSWORD})
         assert response.status_code == 400
 
     @patch("app.k8s_post")
     def test_deploy_does_not_mount_service_account_token(self, mock_k8s_post, client):
         """Tenant pods must not receive Kubernetes API credentials."""
-        response = client.post("/api/deploy", headers=AUTH_HEADERS, json={"subdomain": "isolated"})
+        response = client.post("/api/deploy", headers=AUTH_HEADERS, json={"subdomain": "isolated", **VALID_PASSWORD})
 
         assert response.status_code == 200
         deployment = next(
@@ -364,17 +366,14 @@ if __name__ == "__main__":
     pytest.main([__file__, "-v"])
 
 
-class TestOptionalCreationPassword:
+class TestRequiredCreationPassword:
     @pytest.mark.parametrize('fields', [{}, {'password': '', 'password_confirmation': ''},
                                        {'password': None, 'password_confirmation': None}])
     @patch('app.k8s_post')
-    def test_empty_or_omitted_password_uses_default(self, create, client, fields):
-        response = client.post('/api/deploy', headers=AUTH_HEADERS, json={'subdomain': 'default', **fields})
-        assert response.status_code == 200
-        secret = next(c.args[1] for c in create.call_args_list if c.args[0] == 'secrets')
-        assert secret['stringData']['password'] == 'test-webui-password'
-        assert 'test-webui-password' not in response.text
-        assert 'test-webui-password' not in client.get('/').text
+    def test_empty_or_omitted_password_is_rejected(self, create, client, fields):
+        response = client.post('/api/deploy', headers=AUTH_HEADERS, json={'subdomain': 'nosw', **fields})
+        assert response.status_code == 400
+        create.assert_not_called()
 
     @pytest.mark.parametrize('password', ['instance-only-password', '  mot-dé-passe  '])
     @patch('app.k8s_post')
@@ -392,6 +391,7 @@ class TestOptionalCreationPassword:
         assert app_module.HERMES_WEBUI_PASSWORD == 'test-webui-password'
 
     @pytest.mark.parametrize('fields', [
+        {},
         {'password': 'chosen-password', 'password_confirmation': 'different-password'},
         {'password': 'chosen-password'},
         {'password_confirmation': 'orphan-confirmation'},

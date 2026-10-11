@@ -67,7 +67,7 @@ def test_mutable_or_missing_images_rejected_before_creating_resources(value, rel
     record['agent']['image'] = value
     release.write_text(json.dumps(record))
     with patch.object(app, "k8s_post") as create:
-        assert "error" in app.deploy_instance("test")
+        assert "error" in app.deploy_instance("test", "chosen-password", "chosen-password")
         create.assert_not_called()
 
 

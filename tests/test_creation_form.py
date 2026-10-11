@@ -7,7 +7,24 @@ import pytest
 from app import CONTENT
 
 
-def test_optional_password_form_flow():
+def test_deploy_token_field_removed():
+    """The create form must not expose a deployment-token field anymore."""
+    assert 'deploy-token' not in CONTENT
+    assert 'Jeton de déploiement' not in CONTENT
+    assert 'X-Deploy-Token' not in CONTENT
+
+
+def test_password_fields_mandatory():
+    """Both password fields are always visible, required, and not hidden."""
+    group = re.search(r'<div class="form-group" id="password-confirmation-group"[^>]*>', CONTENT).group(0)
+    assert 'hidden' not in group
+    assert 'id="instance-password"' in CONTENT and 'required' in re.search(
+        r'<input[^>]*id="instance-password"[^>]*>', CONTENT).group(0)
+    assert 'required' in re.search(
+        r'<input[^>]*id="password-confirmation"[^>]*>', CONTENT).group(0)
+
+
+def test_mandatory_password_form_flow():
     node = shutil.which('node')
     if not node:
         pytest.skip('Node is required for the dashboard form check')
@@ -19,7 +36,7 @@ const elements = {};
 const calls = [];
 const document = {getElementById(id) {
   return elements[id] ||= {value: '', type: 'password', hidden: false,
-    listeners: {}, attributes: {}, validity: '',
+    listeners: {}, attributes: {}, validity: '', reported: false,
     addEventListener(name, fn) { this.listeners[name] = fn; },
     setAttribute(name, value) { this.attributes[name] = value; },
     setCustomValidity(value) { this.validity = value; },
@@ -36,40 +53,37 @@ vm.runInContext(SCRIPT, context);
 vm.runInContext(`(async () => {
   const password = elements['instance-password'];
   const confirmation = elements['password-confirmation'];
-  const group = elements['password-confirmation-group'];
-  assert.equal(group.hidden, true);
+  // Empty password: deploy must be blocked, nothing sent to the API.
   document.getElementById('subdomain').value = 'default';
   await deploy({preventDefault() {}});
-  assert.equal(calls.length, 1);
-  assert.equal(JSON.stringify(calls[0]), JSON.stringify({subdomain: 'default'}));
+  assert.equal(calls.length, 0);
+  assert.equal(password.reported, true);
+  // Mismatched confirmation: still blocked.
   password.value = 'chosen-password';
   password.listeners.input();
-  assert.equal(group.hidden, false);
-  assert.equal(confirmation.required, true);
   confirmation.value = 'different-password';
   confirmation.listeners.input();
   await deploy({preventDefault() {}});
-  assert.equal(calls.length, 1);
+  assert.equal(calls.length, 0);
   assert.equal(confirmation.reported, true);
+  // Toggle reveals both fields.
   elements['toggle-password'].listeners.click();
   assert.equal(password.type, 'text');
   assert.equal(confirmation.type, 'text');
+  // Matching password: request is sent with both fields.
   confirmation.value = 'chosen-password';
   confirmation.listeners.input();
   assert.equal(confirmation.validity, '');
   document.getElementById('subdomain').value = 'custom';
   await deploy({preventDefault() {}});
-  assert.equal(calls.length, 2);
-  assert.equal(calls[1].password, 'chosen-password');
-  assert.equal(calls[1].password_confirmation, 'chosen-password');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].password, 'chosen-password');
+  assert.equal(calls[0].password_confirmation, 'chosen-password');
   assert.equal(password.value, '');
   assert.equal(confirmation.value, '');
   assert.equal(password.type, 'password');
-  assert.equal(group.hidden, true);
-  assert.equal(confirmation.required, false);
 })().catch(error => { console.error(error); process.exitCode = 1; });`, context);
 '''
-    # Pass only a non-sensitive script; the default password never enters HTML.
     harness = harness.replace('vm.runInContext(SCRIPT, context);', 'vm.runInContext(' + json.dumps(script) + ', context);')
     harness = harness.replace('document, console, assert, elements, calls,', 'document, console, assert, elements, calls, process,')
     result = subprocess.run([node, '-e', harness], capture_output=True, text=True)

@@ -199,14 +199,16 @@ def build_config() -> str:
 def deploy_instance(subdomain: str, password: str | None = None,
                     password_confirmation: str | None = None) -> dict:
     subdomain = validate_subdomain(subdomain)
-    if password:
-        if len(password) < 4:
-            raise ValueError("Le mot de passe doit contenir au moins 4 caractères")
-        if password != password_confirmation:
-            raise ValueError("Les mots de passe ne correspondent pas")
-    elif password_confirmation:
-        raise ValueError("Renseignez le mot de passe avant sa confirmation")
-    initial_password = password or HERMES_WEBUI_PASSWORD
+    # A custom password, entered twice, is mandatory for every new instance.
+    if not password:
+        raise ValueError("Un mot de passe est obligatoire pour déployer une instance")
+    if len(password) < 4:
+        raise ValueError("Le mot de passe doit contenir au moins 4 caractères")
+    if not password_confirmation:
+        raise ValueError("Confirmez le mot de passe")
+    if password != password_confirmation:
+        raise ValueError("Les mots de passe ne correspondent pas")
+    initial_password = password
     hash8 = os.urandom(4).hex()  # 32-bit random, 8 hex chars
     name = f"agent-{hash8}-{subdomain}"
     domain = f"{subdomain}.ailab.infocepo.com"
@@ -495,22 +497,18 @@ CONTENT = """<!DOCTYPE html>
                     <input type="text" id="subdomain" name="subdomain" placeholder="ex: mon-projet" required>
                 </div>
                 <div class="form-group">
-                    <label for="deploy-token">Jeton de déploiement :</label>
-                    <input type="password" id="deploy-token" autocomplete="off">
-                </div>
-                <div class="form-group">
-                    <label for="instance-password">Mot de passe personnalisé (facultatif) :</label>
+                    <label for="instance-password">Mot de passe :</label>
                     <div class="password-row">
                         <input type="password" id="instance-password" autocomplete="new-password"
-                               minlength="4" aria-describedby="password-hint">
+                               minlength="4" required aria-describedby="password-hint">
                         <button type="button" id="toggle-password" aria-label="Afficher les mots de passe"
                                 aria-pressed="false">👁</button>
                     </div>
-                    <small class="hint" id="password-hint">Laissez vide pour utiliser le mot de passe par défaut.</small>
+                    <small class="hint" id="password-hint">Obligatoire (min. 4 caractères).</small>
                 </div>
-                <div class="form-group" id="password-confirmation-group" hidden>
+                <div class="form-group" id="password-confirmation-group">
                     <label for="password-confirmation">Confirmer le mot de passe :</label>
-                    <input type="password" id="password-confirmation" autocomplete="new-password" minlength="4">
+                    <input type="password" id="password-confirmation" autocomplete="new-password" minlength="4" required>
                 </div>
                 <button type="submit" id="deploy-btn">Déployer</button>
             </form>
@@ -525,38 +523,36 @@ CONTENT = """<!DOCTYPE html>
         const passwordInput = document.getElementById('instance-password');
         const confirmationInput = document.getElementById('password-confirmation');
         const passwordToggle = document.getElementById('toggle-password');
-        function updatePasswordFields() {
-            const custom = passwordInput.value.length > 0;
-            document.getElementById('password-confirmation-group').hidden = !custom;
-            confirmationInput.required = custom;
-            if (!custom) confirmationInput.value = '';
-            confirmationInput.setCustomValidity(custom && confirmationInput.value &&
-                confirmationInput.value !== passwordInput.value ? 'Les mots de passe ne correspondent pas' : '');
+        function validatePasswords() {
+            confirmationInput.setCustomValidity(
+                confirmationInput.value && confirmationInput.value !== passwordInput.value
+                    ? 'Les mots de passe ne correspondent pas' : '');
         }
-        passwordInput.addEventListener('input', updatePasswordFields);
-        confirmationInput.addEventListener('input', updatePasswordFields);
+        passwordInput.addEventListener('input', validatePasswords);
+        confirmationInput.addEventListener('input', validatePasswords);
         passwordToggle.addEventListener('click', () => {
             const show = passwordInput.type === 'password';
             passwordInput.type = confirmationInput.type = show ? 'text' : 'password';
             passwordToggle.setAttribute('aria-pressed', String(show));
             passwordToggle.setAttribute('aria-label', show ? 'Masquer les mots de passe' : 'Afficher les mots de passe');
         });
-        updatePasswordFields();
 
         async function deploy(e) {
             e.preventDefault();
             const subdomain = document.getElementById('subdomain').value;
-            updatePasswordFields();
-            if (passwordInput.value && passwordInput.value !== confirmationInput.value) {
+            validatePasswords();
+            if (!passwordInput.value || !confirmationInput.value) {
+                (passwordInput.value ? confirmationInput : passwordInput).reportValidity();
+                return;
+            }
+            if (passwordInput.value !== confirmationInput.value) {
                 confirmationInput.setCustomValidity('Les mots de passe ne correspondent pas');
                 confirmationInput.reportValidity();
                 return;
             }
-            const payload = { subdomain };
-            if (passwordInput.value) {
-                payload.password = passwordInput.value;
-                payload.password_confirmation = confirmationInput.value;
-            }
+            const payload = { subdomain,
+                password: passwordInput.value,
+                password_confirmation: confirmationInput.value };
             const btn = document.getElementById('deploy-btn');
             const result = document.getElementById('result');
             btn.disabled = true;
@@ -564,8 +560,7 @@ CONTENT = """<!DOCTYPE html>
             try {
                 const resp = await fetch('/api/deploy', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json',
-                               'X-Deploy-Token': document.getElementById('deploy-token').value },
+                    headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload)
                 });
                 let data;
@@ -581,7 +576,6 @@ CONTENT = """<!DOCTYPE html>
                         passwordInput.type = confirmationInput.type = 'password';
                         passwordToggle.setAttribute('aria-pressed', 'false');
                         passwordToggle.setAttribute('aria-label', 'Afficher les mots de passe');
-                        updatePasswordFields();
                         loadInstances();
                     } else {
                         result.innerHTML = '<div class="result error">❌ ' + errorMsg + '</div>';
